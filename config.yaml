@@ -24,7 +24,7 @@ location:                     # assumed: Pune/Saswad works area
   elevation_m: 650             # assumed
 
 # -----------------------------------------------------------------------------
-# PLANTS  (assumed mapping — KPCL has units at these locations; exact
+# PLANTS  (per-plant contract_demand_kva is assumed; tariff.contract_demand_kva below is the company aggregate) (assumed mapping — KPCL has units at these locations; exact
 # machine-to-plant assignment below is an assumption for this prototype)
 # -----------------------------------------------------------------------------
 plants:
@@ -32,14 +32,17 @@ plants:
     name: "Hadapsar Works"
     city: "Pune"
     division: "Compressor & Process Equipment"
+    contract_demand_kva: 280   # assumed — just under this plant's simulated peak (~296 kVA) so breach flagging has something to catch
   - plant_id: "SASWAD"
     name: "Saswad Works"
     city: "Saswad"
     division: "Refrigeration & HVAC / Solar Site"
+    contract_demand_kva: 80    # assumed (simulated peak ~88 kVA)
   - plant_id: "NASHIK"
     name: "Nashik Works"
     city: "Nashik"
     division: "CNG / Test Rig & Fabrication"
+    contract_demand_kva: 70    # assumed (simulated peak ~97 kVA, p99 ~65)
 
 # -----------------------------------------------------------------------------
 # CALENDAR

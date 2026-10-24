@@ -1,0 +1,7 @@
+<resources>
+    <color name="ic_launcher_background">#0F3D5E</color>
+    <color name="brand">#0F3D5E</color>
+    <color name="critical">#C62828</color>
+    <color name="high">#EF6C00</color>
+    <color name="ok">#2E7D32</color>
+</resources>

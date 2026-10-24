@@ -16,21 +16,31 @@ import pandas as pd
 import lightgbm as lgb
 import yaml
 
+from ml import plant_cfg
+
 DB_PATH = "kpcl_energy.db"
 HORIZON_STEPS = 96          # 24h at 15-min resolution
 LAG_DAY_STEPS = 96          # t-24h
 LAG_WEEK_STEPS = 96 * 7     # t-7d
 
 
-def load_frame(conn):
-    mm = pd.read_sql("SELECT ts, kW, kVA, pf FROM fact_main_meter", conn)
+def load_frame(conn, plant_id=None):
+    plant_id = plant_cfg.norm(plant_id)
+    if plant_id is None:
+        mm = pd.read_sql("SELECT ts, kW, kVA, pf FROM fact_main_meter", conn)
+    else:
+        mm = pd.read_sql("SELECT ts, kW, kVA, pf FROM fact_plant_meter WHERE plant_id = ?", conn, params=(plant_id,))
     mm["ts"] = pd.to_datetime(mm["ts"])
     mm = mm.sort_values("ts").reset_index(drop=True)
 
     wx = pd.read_sql("SELECT ts, ambient_temp_c, wet_bulb_c FROM fact_weather", conn)
     wx["ts"] = pd.to_datetime(wx["ts"])
 
-    prod = pd.read_sql("SELECT date, shift, units, is_surge FROM fact_production", conn)
+    if plant_id is None:
+        prod = pd.read_sql("SELECT date, shift, units, is_surge FROM fact_production", conn)
+    else:
+        prod = pd.read_sql("SELECT date, shift, units, is_surge FROM fact_production WHERE plant_id = ?",
+                           conn, params=(plant_id,))
     daily_units = prod.groupby("date")["units"].sum().rename("planned_units")
     daily_units.index = pd.to_datetime(daily_units.index)
 
@@ -86,11 +96,11 @@ def train_test_split_by_month(df):
     return train, test, cutoff
 
 
-def run_forecast(config, conn):
+def run_forecast(config, conn, plant_id=None):
     """Train once, return everything an API or CLI needs: the fitted model,
     its feature columns, the climatology lookup, and test-period predictions
     with metrics. Reused by ml/forecast.py's CLI and by api/main.py."""
-    df = load_frame(conn)
+    df = load_frame(conn, plant_id)
     df, feature_cols = build_features(df, config)
     df = df.dropna(subset=feature_cols + ["kW"]).reset_index(drop=True)
 
@@ -121,7 +131,7 @@ def run_forecast(config, conn):
 
     pf_est = test["pf"].to_numpy()
     pred_kva = pred / np.clip(pf_est, 0.85, 0.99)
-    contract_kva = config["tariff"]["contract_demand_kva"]
+    contract_kva = plant_cfg.contract_kva(config, plant_id)
     breach_mask = pred_kva > contract_kva
 
     test = test.copy()

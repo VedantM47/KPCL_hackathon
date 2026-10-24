@@ -18,6 +18,7 @@ from generator import fuel_events as fev
 from generator import noise as noise_mod
 from generator import emissions as em
 from generator import main_meter as mm
+from generator import plants as plants_mod
 
 SUM_COLS = {"units_produced"}
 MINMAX_SUFFIXES = ("_c",)
@@ -125,6 +126,11 @@ CREATE TABLE IF NOT EXISTS fact_emissions (
 CREATE TABLE IF NOT EXISTS fact_main_meter (
     ts TEXT, kW REAL, kVA REAL, pf REAL, peak_flag INTEGER, cost_rs REAL
 );
+CREATE TABLE IF NOT EXISTS fact_plant_meter (
+    ts TEXT, plant_id TEXT, kW REAL, kVA REAL, pf REAL, metered_load_kw REAL, cost_rs REAL,
+    scope1_tco2 REAL, scope2_tco2 REAL, solar_avoided_tco2 REAL
+);
+CREATE INDEX IF NOT EXISTS idx_fact_plant_meter ON fact_plant_meter(plant_id, ts);
 CREATE TABLE IF NOT EXISTS rollup_hourly_asset (
     ts_hour TEXT, asset_id TEXT, kWh REAL, max_kW REAL
 );
@@ -200,6 +206,10 @@ def build(config, scenario):
     emissions_15 = em.compute_emissions_15m(grid_kwh_15, lpg_kg_15.to_numpy(), gas_kg_15.to_numpy(), diesel_litre_15, refrigerant_leak_kg_15, solar_kwh_15, config)
     emissions_15.insert(0, "ts", main_meter_15m["ts"])
 
+    plant_meter_15m = plants_mod.build_plant_meter(
+        assets_15m, main_meter_15m, grid_kwh_15, lpg_kg_15.to_numpy(), gas_kg_15.to_numpy(), diesel_litre_15,
+        refrigerant_leak_kg_15, solar_kwh_15, config)
+
     # dq noise/missing pattern keyed only off the two shipped scenario names, so
     # ad-hoc counterfactuals (ml/recommendations.py) get the SAME pattern as
     # baseline — otherwise a differing random dropout would contaminate the
@@ -240,6 +250,7 @@ def build(config, scenario):
         "fault_labels": out["fault_labels"],
         "main_meter_15m": main_meter_15m,
         "emissions_15": emissions_15,
+        "plant_meter_15m": plant_meter_15m,
         "fact_meter": fact_meter,
     }
 
@@ -299,6 +310,7 @@ def write_db(db_path, config, built):
     to_sql_batched(conn, "fact_main_meter", built["main_meter_15m"][["ts", "kW", "kVA", "pf", "peak_flag", "cost_rs"]])
     to_sql_batched(conn, "fact_emissions", built["emissions_15"])
     to_sql_batched(conn, "fact_meter", built["fact_meter"])
+    to_sql_batched(conn, "fact_plant_meter", built["plant_meter_15m"].assign(ts=lambda d: d["ts"].astype(str)))
 
     for aid, df15 in built["assets_15m"].items():
         if aid in COMPRESSOR_IDS:
@@ -340,19 +352,12 @@ def build_rollups(conn, built, config):
     daily_asset = fact_meter.groupby(["date", "asset_id"]).agg(kWh=("kWh", "sum"), max_kW=("kW", "max")).reset_index()
     to_sql_batched(conn, "rollup_daily_asset", daily_asset)
 
-    asset_plant = {a["asset_id"]: a["plant_id"] for a in config["assets"]}
-    fact_meter["plant_id"] = fact_meter["asset_id"].map(asset_plant)
-
-    emissions = built["emissions_15"].copy()
-    emissions["date"] = pd.to_datetime(emissions["ts"]).dt.date.astype(str)
-    daily_emissions = emissions.groupby("date").agg(scope1_tco2=("scope1_tco2", "sum"), scope2_tco2=("scope2_tco2", "sum")).reset_index()
-
-    main_meter = built["main_meter_15m"].copy()
-    main_meter["date"] = pd.to_datetime(main_meter["ts"]).dt.date.astype(str)
-    daily_cost = main_meter.groupby("date").agg(cost_rs=("cost_rs", "sum")).reset_index()
-
-    daily_plant = fact_meter.dropna(subset=["plant_id"]).groupby(["date", "plant_id"]).agg(kWh=("kWh", "sum")).reset_index()
-    daily_plant = daily_plant.merge(daily_emissions, on="date", how="left").merge(daily_cost, on="date", how="left")
+    pm = built["plant_meter_15m"].copy()
+    pm["date"] = pd.to_datetime(pm["ts"]).dt.date.astype(str)
+    pm["kWh"] = pm["kW"] * 0.25
+    daily_plant = pm.groupby(["date", "plant_id"]).agg(
+        kWh=("kWh", "sum"), scope1_tco2=("scope1_tco2", "sum"), scope2_tco2=("scope2_tco2", "sum"),
+        cost_rs=("cost_rs", "sum")).reset_index()
     to_sql_batched(conn, "rollup_daily_plant", daily_plant)
 
 

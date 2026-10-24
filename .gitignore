@@ -1,0 +1,19 @@
+# python
+__pycache__/
+*.pyc
+# generated databases (100 MB each, over GitHub's file limit) — rebuild with:
+#   python build_db.py --scenario baseline && python build_db.py --scenario optimized
+kpcl_energy.db
+kpcl_energy_optimized.db
+# logs
+*.log
+# android
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+# frontend
+web_template/node_modules/
+web_template/dist/
+# backup of the template's original git metadata (kept out of the repo)
+.web_template_git_backup/

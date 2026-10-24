@@ -16,6 +16,7 @@ import pandas as pd
 import yaml
 
 import build_db
+from ml import plant_cfg
 
 POLICY_ACTIONS = [
     {"name": "Lower compressor pressure setpoint by 0.5 bar",
@@ -37,11 +38,35 @@ FAULT_FIX_ACTIONS = [
 ]
 
 
+# assets each action touches — a plant only gets the action if it owns one of them. Per-plant
+# figures are an allocation of the company meter, so an action elsewhere would otherwise leak
+# small spurious +/- amounts into plants it cannot affect.
+ACTION_ASSETS = {
+    "Lower compressor pressure setpoint by 0.5 bar": {"CMP-CENT-01", "CMP-SCR-01", "CMP-REC-01", "TEST-RIG-CNG-01"},
+    "Shift CNG test rig to off-peak ToD (09:00 -> 22:30)": {"TEST-RIG-CNG-01"},
+    "Enable CNC idle shutdown": {"CNC-GEAR-01"},
+    "Start furnace earlier to avoid peak-ToD overlap": {"FURNACE-HT-01"},
+    "Switch chiller sequencing to SCR-lead": {"CHILLER-SCR-01", "CHILLER-VAM-01"},
+    "Fix CMP-SCR-01 header leak before it grows": {"CMP-SCR-01"},
+    "Clean CHILLER-SCR-01 condenser (fouling)": {"CHILLER-SCR-01"},
+    "Stop PAINT-BOOTH-01 fan overrun after shift end": {"PAINT-BOOTH-01"},
+}
+
+
+def relevant(config, plant_id, name):
+    return plant_id == "ALL" or bool(ACTION_ASSETS[name] & plant_cfg.assets_of(config, plant_id))
+
+
 def totals(built):
-    kwh = built["main_meter_15m"]["kW"].sum() * 0.25
-    cost_rs = built["main_meter_15m"]["cost_rs"].sum()
-    tco2 = built["emissions_15"]["scope1_tco2"].sum() + built["emissions_15"]["scope2_tco2"].sum()
-    return {"kWh": kwh, "cost_rs": cost_rs, "tco2": tco2}
+    """Annual kWh / Rs / tCO2 / peak kVA for the whole company (ALL) and for each plant."""
+    mm = built["main_meter_15m"]
+    em = built["emissions_15"]
+    out = {"ALL": {"kWh": mm["kW"].sum() * 0.25, "cost_rs": mm["cost_rs"].sum(),
+                   "tco2": em["scope1_tco2"].sum() + em["scope2_tco2"].sum()}}
+    for plant_id, g in built["plant_meter_15m"].groupby("plant_id"):
+        out[plant_id] = {"kWh": g["kW"].sum() * 0.25, "cost_rs": g["cost_rs"].sum(),
+                         "tco2": g["scope1_tco2"].sum() + g["scope2_tco2"].sum()}
+    return out
 
 
 def run_policy_variant(config, overrides):
@@ -59,50 +84,59 @@ def run_fault_fix_variant(config, asset_id, fault_type):
     return totals(built)
 
 
+def _job(args):
+    config, kind, spec = args
+    if kind == "policy":
+        return spec["name"], run_policy_variant(config, spec["overrides"])
+    return spec["name"], run_fault_fix_variant(config, spec["asset_id"], spec["fault_type"])
+
+
 def main():
+    from concurrent.futures import ProcessPoolExecutor
+
     with open("config.yaml") as f:
         config = yaml.safe_load(f)
 
-    print("Simulating true baseline ...")
-    baseline_totals = totals(build_db.build(config, "baseline"))
-    print(f"Baseline annual: {baseline_totals['kWh']:.0f} kWh, Rs {baseline_totals['cost_rs']:.0f}, {baseline_totals['tco2']:.1f} tCO2\n")
+    jobs = [(config, "policy", a) for a in POLICY_ACTIONS] + [(config, "fault_fix", a) for a in FAULT_FIX_ACTIONS]
+    kinds = {a["name"]: "policy" for a in POLICY_ACTIONS} | {a["name"]: "fault_fix" for a in FAULT_FIX_ACTIONS}
+    print(f"Simulating baseline + {len(jobs)} counterfactuals in parallel ...", flush=True)
+    with ProcessPoolExecutor(max_workers=8) as pool:
+        base_future = pool.submit(_baseline, config)
+        futures = [pool.submit(_job, j) for j in jobs]
+        baseline_totals = base_future.result()
+        results = dict(f.result() for f in futures)
+
+    print(f"Baseline annual (company): {baseline_totals['ALL']['kWh']:.0f} kWh, "
+          f"Rs {baseline_totals['ALL']['cost_rs']:.0f}, {baseline_totals['ALL']['tco2']:.1f} tCO2\n")
 
     rows = []
-    for action in POLICY_ACTIONS:
-        print(f"Simulating counterfactual: {action['name']} ...")
-        variant_totals = run_policy_variant(config, action["overrides"])
-        rows.append({
-            "action": action["name"], "type": "policy",
-            "kWh_saved": baseline_totals["kWh"] - variant_totals["kWh"],
-            "rs_saved": baseline_totals["cost_rs"] - variant_totals["cost_rs"],
-            "tco2_saved": baseline_totals["tco2"] - variant_totals["tco2"],
-        })
+    for name, variant in results.items():
+        for plant_id in baseline_totals:
+            if not relevant(config, plant_id, name):
+                continue
+            rows.append({
+                "plant_id": plant_id, "action": name, "type": kinds[name],
+                "kWh_saved": baseline_totals[plant_id]["kWh"] - variant[plant_id]["kWh"],
+                "rs_saved": baseline_totals[plant_id]["cost_rs"] - variant[plant_id]["cost_rs"],
+                "tco2_saved": baseline_totals[plant_id]["tco2"] - variant[plant_id]["tco2"],
+            })
 
-    for action in FAULT_FIX_ACTIONS:
-        print(f"Simulating counterfactual: {action['name']} ...")
-        variant_totals = run_fault_fix_variant(config, action["asset_id"], action["fault_type"])
-        rows.append({
-            "action": action["name"], "type": "fault_fix",
-            "kWh_saved": baseline_totals["kWh"] - variant_totals["kWh"],
-            "rs_saved": baseline_totals["cost_rs"] - variant_totals["cost_rs"],
-            "tco2_saved": baseline_totals["tco2"] - variant_totals["tco2"],
-        })
+    report = pd.DataFrame(rows).sort_values(["plant_id", "rs_saved"], ascending=[True, False]).reset_index(drop=True)
+    report["rank"] = report.groupby("plant_id").cumcount() + 1
 
-    report = pd.DataFrame(rows).sort_values("rs_saved", ascending=False).reset_index(drop=True)
-    report["rank"] = report.index + 1
-
-    print("\n=== Ranked recommendations (annual impact) ===")
-    print(report[["rank", "action", "type", "kWh_saved", "rs_saved", "tco2_saved"]].to_string(index=False))
+    print("=== Ranked recommendations (annual impact, company) ===")
+    print(report[report["plant_id"] == "ALL"][["rank", "action", "type", "kWh_saved", "rs_saved", "tco2_saved"]].to_string(index=False))
 
     report.to_csv("recommendations.csv", index=False)
-    print("\nWritten to recommendations.csv")
-    print("\nNote: 'Switch chiller sequencing to SCR-lead' trades a large Scope 1 (gas)")
-    print("reduction for an even larger Scope 2 (grid electricity) increase, because")
-    print("CHILLER-VAM-01 and CHILLER-SCR-01 are similarly rated — flipping lead/lag moves")
-    print("the majority of the cooling load across fuel types, not a marginal shift.")
-    print("'Start furnace earlier' shows a small negative saving here; its effect is")
-    print("sensitive to ToD boundaries and is worth a second look before trusting in a demo.")
+    print("\nWritten to recommendations.csv (rows per plant_id; ALL = company)")
+    print("\nNote: 'Switch chiller sequencing to SCR-lead' trades a large Scope 1 (gas) reduction")
+    print("for an even larger Scope 2 (grid electricity) increase. 'Start furnace earlier' is")
+    print("sensitive to ToD boundaries and shows a small negative saving.")
     return report
+
+
+def _baseline(config):
+    return totals(build_db.build(config, "baseline"))
 
 
 if __name__ == "__main__":
