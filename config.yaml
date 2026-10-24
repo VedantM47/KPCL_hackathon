@@ -1,0 +1,345 @@
+# =============================================================================
+# KPCL AI-Driven Carbon Accounting & Intelligent Energy Management Dashboard
+# CONFIG — every rating/tariff/factor below is a PLACEHOLDER.
+# Values tagged "assumed" were NOT provided by the user and were filled in
+# by the assistant using generic engineering rules of thumb. VERIFY before
+# using any number here for a real decision. See README.md "Assumptions"
+# section for the full list and rationale.
+# =============================================================================
+
+project:
+  name: "KPCL AI-Driven Carbon Accounting & Energy Management (Hackathon Prototype)"
+  data_label: "benchmark-calibrated simulation"   # must appear in UI/README
+
+seed: 42
+start_date: "2025-01-01"     # 365 days simulated from here
+timezone: "Asia/Kolkata"
+resolution_internal_minutes: 1
+resolution_output_minutes: 15
+
+location:                     # assumed: Pune/Saswad works area
+  name: "Saswad, Pune, Maharashtra"
+  lat: 18.5
+  lon: 73.9
+  elevation_m: 650             # assumed
+
+# -----------------------------------------------------------------------------
+# PLANTS  (assumed mapping — KPCL has units at these locations; exact
+# machine-to-plant assignment below is an assumption for this prototype)
+# -----------------------------------------------------------------------------
+plants:
+  - plant_id: "HADAPSAR"
+    name: "Hadapsar Works"
+    city: "Pune"
+    division: "Compressor & Process Equipment"
+  - plant_id: "SASWAD"
+    name: "Saswad Works"
+    city: "Saswad"
+    division: "Refrigeration & HVAC / Solar Site"
+  - plant_id: "NASHIK"
+    name: "Nashik Works"
+    city: "Nashik"
+    division: "CNG / Test Rig & Fabrication"
+
+# -----------------------------------------------------------------------------
+# CALENDAR
+# -----------------------------------------------------------------------------
+calendar:
+  shifts:
+    A: {start: "06:00", end: "14:00"}
+    B: {start: "14:00", end: "22:00"}
+  sunday_off: true
+  saturday_rule: "half_day"   # assumed: options = full_day | half_day | off
+  saturday_half_day_shift: "A"  # only shift A runs on Saturday if half_day
+  holidays_2025:               # assumed fixed dates (India, 2025) — VERIFY
+    - {date: "2025-01-26", name: "Republic Day"}
+    - {date: "2025-03-14", name: "Holi"}
+    - {date: "2025-05-01", name: "Maharashtra Day"}
+    - {date: "2025-08-15", name: "Independence Day"}
+    - {date: "2025-08-27", name: "Ganesh Chaturthi"}
+    - {date: "2025-10-20", name: "Diwali"}
+  planned_maintenance_days:    # assumed: 3 shutdown days spread across year
+    - {date: "2025-04-14", note: "Annual shutdown day 1"}
+    - {date: "2025-04-15", note: "Annual shutdown day 2"}
+    - {date: "2025-09-08", note: "Monsoon maintenance day"}
+
+# -----------------------------------------------------------------------------
+# WEATHER (synthetic; Pune/Saswad seasonal profile)
+# -----------------------------------------------------------------------------
+weather:
+  source: "synthetic"          # synthetic | nasa_power_csv
+  nasa_power_csv_path: "data/nasa_power_saswad.csv"   # used only if present
+  ambient_temp_c:               # assumed monthly mean/min/max (deg C)
+    annual_mean: 25.5
+    amplitude: 6.5              # peak-to-mean swing across the year
+    daily_amplitude: 7.0        # diurnal swing
+  humidity_pct:
+    dry_season_mean: 45
+    monsoon_mean: 85
+  monsoon_months: [6, 7, 8, 9]  # Jun-Sep
+  solar_irradiance_kwh_m2_day:  # assumed clear-sky-ish annual avg
+    dry_season: 5.8
+    monsoon: 3.2
+  noise_std_temp_c: 0.6
+  noise_std_humidity_pct: 3.0
+
+# -----------------------------------------------------------------------------
+# PRODUCTION PLAN (assumed order volumes — VERIFY)
+# -----------------------------------------------------------------------------
+production:
+  product_families:
+    - family: "gearbox"
+      plant_id: "HADAPSAR"
+      units_per_shift_mean: 12
+      units_per_shift_std: 3
+      air_demand_m3min_per_unit: 0.08   # assumed
+      cnc_minutes_per_unit: 35           # assumed
+    - family: "compressor_package"
+      plant_id: "HADAPSAR"
+      units_per_shift_mean: 4
+      units_per_shift_std: 1.2
+      air_demand_m3min_per_unit: 0.15
+      cnc_minutes_per_unit: 0
+    - family: "refrigeration_package"
+      plant_id: "SASWAD"
+      units_per_shift_mean: 3
+      units_per_shift_std: 1.0
+      air_demand_m3min_per_unit: 0.10
+      cnc_minutes_per_unit: 0
+  surge_probability_per_day: 0.03       # hard-negative fault: production surge
+  surge_multiplier: [1.4, 1.8]
+
+# -----------------------------------------------------------------------------
+# ASSETS — ratings are "assumed" typical values for machines of this class.
+# -----------------------------------------------------------------------------
+assets:
+  - asset_id: "CMP-CENT-01"
+    type: "compressor_centrifugal"
+    plant_id: "HADAPSAR"
+    rated_kw: 160            # assumed
+    rated_m3_per_min: 26.0   # assumed — tuned so kW/(flow*60) stays in 0.10-0.13 kWh/m3 across a full year of baseline leak drift
+    idle_fraction_of_full_load: 0.28
+    role: "lead"
+  - asset_id: "CMP-SCR-01"
+    type: "compressor_screw"
+    plant_id: "HADAPSAR"
+    rated_kw: 90             # assumed
+    rated_m3_per_min: 14.6   # assumed — tuned, see CMP-CENT-01 note
+    idle_fraction_of_full_load: 0.27
+    role: "lag"
+  - asset_id: "CMP-REC-01"
+    type: "compressor_reciprocating"
+    plant_id: "NASHIK"
+    rated_kw: 55             # assumed
+    rated_m3_per_min: 9.0    # assumed — tuned, see CMP-CENT-01 note
+    idle_fraction_of_full_load: 0.30
+    role: "lag"
+  - asset_id: "TEST-RIG-CNG-01"
+    type: "compressor_test_rig"
+    plant_id: "NASHIK"
+    rated_kw: 75             # assumed
+    rated_m3_per_min: 12.2   # assumed — tuned, see CMP-CENT-01 note
+    idle_fraction_of_full_load: 0.25
+    role: "lag"
+    default_start_time: "09:00"   # policy-controllable
+  - asset_id: "CHILLER-VAM-01"
+    type: "chiller_vam"
+    plant_id: "SASWAD"
+    rated_tr: 150             # assumed
+    thermal_cop_range: [0.7, 1.2]
+    fuel_type: "gas"          # assumed — flagged in README, NOT confirmed
+  - asset_id: "CHILLER-SCR-01"
+    type: "chiller_screw_electric"
+    plant_id: "SASWAD"
+    rated_tr: 120             # assumed
+    kw_per_tr_base: 0.85
+  - asset_id: "CNC-GEAR-01"
+    type: "cnc"
+    plant_id: "HADAPSAR"
+    rated_kw: 18              # assumed
+    idle_kw: 3.0
+  - asset_id: "FURNACE-HT-01"
+    type: "furnace_heat_treat"
+    plant_id: "HADAPSAR"
+    rated_kw: 120             # assumed electric-assist; fuel is primary (LPG)
+    fuel_type: "LPG"
+    batch_mass_kg_mean: 450
+    batch_mass_kg_std: 80
+    setpoint_temp_c: 860      # assumed hardening temp
+    efficiency: 0.55
+    standby_loss_kw: 8
+    default_start_time: "07:00"   # policy-controllable
+  - asset_id: "PAINT-BOOTH-01"
+    type: "paint_booth"
+    plant_id: "HADAPSAR"
+    fan_kw: 22                # assumed
+    air_draw_m3min: 2.5       # assumed — must equal compressor-room load
+    oven_kw: 35
+    batches_per_day_mean: 3
+  - asset_id: "SOLAR-SASWAD-01"
+    type: "solar_pv"
+    plant_id: "SASWAD"
+    rated_kwp: 500            # assumed
+    panel_efficiency: 0.195
+    inverter_kw: 450
+    temp_derate_coeff: -0.004   # per deg C above 25
+
+# -----------------------------------------------------------------------------
+# COMPRESSOR PHYSICS
+# -----------------------------------------------------------------------------
+compressor:
+  pressure_lower_bar: 6.8
+  pressure_upper_bar: 7.4
+  overpressure_power_penalty_per_bar: 0.065   # 6.5% / bar above 7 bar baseline
+  leak_start_fraction_of_rated_flow: 0.08
+  leak_growth_fraction_per_day: 0.00015        # slow background pipework drift; faults grow much faster (see compressor.py)
+  specific_power_target_range: [0.10, 0.13]   # kWh/m3 @ 7 bar
+  base_air_demand_m3min: 3.0                  # non-production baseline draw
+  production_air_demand_k: 1.0                # scaling factor on production-driven air demand
+
+# -----------------------------------------------------------------------------
+# FAULT SCHEDULE — each entry becomes a fact_fault_label row
+# -----------------------------------------------------------------------------
+faults:
+  - fault_type: "leak_growth"
+    asset_id: "CMP-SCR-01"
+    start: "2025-02-01"
+    end: "2025-04-15"
+    magnitude: 2.2     # multiplier on normal leak growth rate
+  - fault_type: "setpoint_drift"
+    asset_id: "CMP-CENT-01"
+    start: "2025-03-01"
+    end: "2025-03-21"
+    magnitude: 1.2     # bar drift over window
+  - fault_type: "condenser_fouling"
+    asset_id: "CHILLER-SCR-01"
+    start: "2025-05-01"
+    end: "2025-07-31"
+    magnitude: 1.0     # fouling severity factor
+  - fault_type: "refrigerant_leak"
+    asset_id: "CHILLER-SCR-01"
+    start: "2025-08-01"
+    end: "2025-08-20"
+    magnitude: 0.35    # COP drop fraction, plus a top-up fuel event
+  - fault_type: "cnc_idle_drift"
+    asset_id: "CNC-GEAR-01"
+    start: "2025-06-01"
+    end: "2025-09-30"
+    magnitude: 1.0     # idle power ramps 3 -> 8 kW over window
+  - fault_type: "furnace_door_open"
+    asset_id: "FURNACE-HT-01"
+    start: "2025-07-10"
+    end: "2025-07-10"
+    magnitude: 0.15    # +15% fuel for a few hours
+  - fault_type: "paint_fan_overrun"
+    asset_id: "PAINT-BOOTH-01"
+    start: "2025-10-01"
+    end: "2025-11-30"
+    magnitude: 1.0     # fan keeps running ~1h after shift end
+  - fault_type: "weekend_baseload_waste"
+    asset_id: "CMP-CENT-01"
+    start: "2025-11-01"
+    end: "2025-12-15"
+    magnitude: 1.0
+
+grid_outages:        # assumed injected outages — VERIFY (not real DISCOM outage records)
+  - {date: "2025-03-10", start: "11:00", end: "13:00"}
+  - {date: "2025-06-18", start: "15:00", end: "16:30"}
+  - {date: "2025-09-05", start: "10:00", end: "11:00"}
+dg_fuel_litre_per_kwh: 0.32   # assumed diesel genset specific fuel consumption — VERIFY
+
+hard_negatives:
+  - label_type: "production_surge"
+    start: "2025-02-10"
+    end: "2025-02-12"
+  - label_type: "heat_wave"
+    start: "2025-04-20"
+    end: "2025-04-27"
+  - label_type: "planned_maintenance_day"
+    start: "2025-04-14"
+    end: "2025-04-15"
+
+# -----------------------------------------------------------------------------
+# POLICY — controllable settings; baseline vs optimized scenario
+# -----------------------------------------------------------------------------
+policy:
+  baseline:
+    compressor_pressure_lower_bar: 6.8
+    compressor_pressure_upper_bar: 7.4
+    test_rig_start_time: "09:00"      # mid-shift, on-peak ToD
+    cnc_idle_shutdown: false
+    furnace_start_time: "07:00"
+    chiller_sequencing: "VAM_lead"
+  optimized:
+    compressor_pressure_lower_bar: 6.3
+    compressor_pressure_upper_bar: 6.9   # 0.5 bar lower -> checkable ~3% saving
+    test_rig_start_time: "22:30"         # shifted to off-peak ToD
+    cnc_idle_shutdown: true
+    furnace_start_time: "06:15"          # avoid peak overlap
+    # kept same as baseline (VAM_lead) deliberately: switching to SCR_lead
+    # trades Scope 1 (gas) for a much larger Scope 2 (grid) increase since the
+    # two chillers are similarly rated — see ml/recommendations.py, which
+    # surfaces that tradeoff on its own rather than bundling it silently into
+    # "optimized" and making the headline scenario a net loss on kWh/cost.
+    chiller_sequencing: "VAM_lead"
+
+# -----------------------------------------------------------------------------
+# TARIFF — illustrative ToD structure. VERIFY before use (not an actual
+# MSEDCL/KPCL industrial tariff schedule).
+# -----------------------------------------------------------------------------
+tariff:
+  source_note: "ILLUSTRATIVE — VERIFY before use. Loosely modeled on typical Maharashtra HT industrial ToD structure; not an official MSEDCL tariff order."
+  contract_demand_kva: 400    # assumed — set just above typical peak (~430 kVA max,
+                               # ~334 kVA p99) so breach-risk flagging has something
+                               # real to catch instead of being trivially always-false
+  demand_charge_rs_per_kva: 480   # assumed, VERIFY
+  tod_periods:                    # assumed, VERIFY
+    - {name: "off_peak", hours: ["22:00", "06:00"], rate_rs_per_kwh: 6.20}
+    - {name: "normal", hours: ["06:00", "09:00"], rate_rs_per_kwh: 7.80}
+    - {name: "peak", hours: ["09:00", "12:00"], rate_rs_per_kwh: 9.80}
+    - {name: "normal2", hours: ["12:00", "18:00"], rate_rs_per_kwh: 7.80}
+    - {name: "peak2", hours: ["18:00", "22:00"], rate_rs_per_kwh: 9.80}
+  power_factor_target: 0.95
+  pf_penalty_below: 0.90
+  pf_penalty_rs_per_kvah: 0.25     # assumed
+
+# -----------------------------------------------------------------------------
+# EMISSION FACTORS — ALL VERIFY before use. Sources are placeholders.
+# -----------------------------------------------------------------------------
+emission_factors:
+  grid_tco2_per_mwh:
+    value: 0.716
+    source: "CEA CO2 Baseline Database (illustrative all-India grid average) — VERIFY before use"
+    version: "v19 (illustrative)"
+    year: 2023
+  diesel_kgco2_per_litre:
+    value: 2.68
+    source: "IPCC/CEA generic diesel factor — VERIFY before use"
+    version: "illustrative"
+    year: 2023
+  lpg_kgco2_per_kg:
+    value: 2.98
+    source: "IPCC generic LPG factor — VERIFY before use"
+    version: "illustrative"
+    year: 2023
+  natural_gas_kgco2_per_kg:
+    value: 2.75
+    source: "IPCC generic NG factor — VERIFY before use"
+    version: "illustrative"
+    year: 2023
+  refrigerant_gwp:
+    r134a: {value: 1430, source: "IPCC AR5 GWP100 — VERIFY before use"}
+    r410a: {value: 2088, source: "IPCC AR5 GWP100 — VERIFY before use"}
+
+# -----------------------------------------------------------------------------
+# DATA QUALITY / MEASUREMENT REALISM
+# -----------------------------------------------------------------------------
+data_quality:
+  missing_fraction: [0.01, 0.03]
+  frozen_sensor_stretch_count: 4
+  frozen_sensor_stretch_minutes: [60, 240]
+  meter_drift_asset: "CMP-REC-01"
+  meter_drift_fraction_per_month: 0.004
+  unmetered_loss_fraction: [0.05, 0.08]
+  noise_base_pct: 0.015
+  noise_low_load_multiplier: 3.0

@@ -1,0 +1,9 @@
+action,type,kWh_saved,rs_saved,tco2_saved,rank
+Shift CNG test rig to off-peak ToD (09:00 -> 22:30),policy,15488.562669709208,151787.9141631499,11.094464981758847,1
+Lower compressor pressure setpoint by 0.5 bar,policy,16241.85300836782,128781.50820780173,11.630309189253012,2
+Fix CMP-SCR-01 header leak before it grows,fault_fix,11949.11579579208,89361.93862240668,8.538636428118025,3
+Enable CNC idle shutdown,policy,7777.122575445683,52663.685698494315,5.568419764019154,4
+Clean CHILLER-SCR-01 condenser (fouling),fault_fix,4608.570295978454,39656.32664437778,3.3010615341490848,5
+Stop PAINT-BOOTH-01 fan overrun after shift end,fault_fix,962.8196109271375,6521.076002937742,0.6893788414238315,6
+Start furnace earlier to avoid peak-ToD overlap,policy,-6987.050241175923,-52242.12733015325,-5.001822506239705,7
+Switch chiller sequencing to SCR-lead,policy,-374185.96740993776,-3033975.348566875,197.59048833838233,8
