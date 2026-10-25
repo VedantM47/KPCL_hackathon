@@ -5,10 +5,17 @@
 > are config placeholders — see **"Every value I assumed"** below before
 > quoting any figure outside this prototype.
 
-A hackathon prototype: a synthetic 365-day, 15-minute-resolution dataset for a
-10-asset industrial plant (compressors, chillers, a furnace, a paint booth, a
-CNC cell, solar), plus anomaly detection, a load forecaster, auto-generated
-savings recommendations, a FastAPI backend, and a React dashboard.
+A hackathon prototype for Kirloskar Pneumatic (KPCL): a synthetic 365-day,
+15-minute-resolution dataset for a 10-asset, three-plant company (Hadapsar,
+Saswad, Nashik — compressors, chillers, a furnace, a paint booth, a CNC cell,
+solar), with Scope 1/2 carbon accounting, anomaly detection, a walk-forward
+day-ahead forecaster, simulated savings recommendations and what-if levers, a
+FastAPI backend with a simulated live replay, a React dashboard, PDF reports,
+and an Android on-call alert app.
+
+**Quick start:** see **[HOW_TO_RUN.md](HOW_TO_RUN.md)** — one command
+(`run-demo.ps1`) starts the API and the dashboard. Latest release (phone APK +
+notes): https://github.com/VedantM47/KPCL_hackathon/releases/latest
 
 ---
 
@@ -18,30 +25,45 @@ savings recommendations, a FastAPI backend, and a React dashboard.
 |---|---|
 | Simulation | Python 3.13, numpy, pandas, PyYAML |
 | Database | SQLite |
-| ML | scikit-learn (IsolationForest), LightGBM |
-| API | FastAPI, uvicorn, reportlab (PDF export) |
-| Frontend | React 19, Vite 8, TanStack Router, Tailwind CSS v4, Recharts, shadcn/ui (Radix) |
+| ML | scikit-learn (IsolationForest), LightGBM (quantile + mean models) |
+| API | FastAPI, uvicorn, Server-Sent Events, reportlab (PDF export) |
+| Dashboard | React 19, Vite 8, TanStack Router/Query, Tailwind CSS v4, Recharts, shadcn/ui (Radix), react-three-fiber + drei (3D) |
+| Phone app | Native Kotlin, no third-party libraries (Android 8+) |
+| CI / release | GitHub Actions builds the APK; a `v*` tag publishes a Release |
 
 ---
 
 ## 2. Project layout
 
 ```
-config.yaml                 every rating, setpoint, fault, tariff, emission factor
-generator/                  the simulation (see DATABASE_AND_GENERATOR.md)
-build_db.py                 runs the simulation, writes kpcl_energy[_optimized].db
-validate.py                 8 PASS/FAIL checks against both scenario DBs
+config.yaml                  every rating, setpoint, fault, tariff, emission factor, plant
+generator/                   the simulation (see DATABASE_AND_GENERATOR.md); plants.py splits the company meter per plant
+build_db.py                  runs the simulation, writes kpcl_energy[_optimized].db
+validate.py                  PASS/FAIL checks against both scenario DBs
 ml/
-  anomaly.py                 IsolationForest + rule checks, evaluated against fact_fault_label
-  forecast.py                LightGBM day-ahead 15-min load forecast
-  recommendations.py         ranked actions from real counterfactual simulations
+  anomaly.py                  IsolationForest + rule checks, evaluated against fact_fault_label
+  forecast.py                 walk-forward day-ahead forecast: interval band + daily-peak breach risk
+  recommendations.py          ranked actions from real counterfactual simulations
+  whatif.py                   one-lever-at-a-time simulation grid (what-if simulator)
+  peak_shaving.py             day-level peak-shaving schedule planner
+  losses.py                   compressed-air leak and anomaly-excess costing
+  plant_cfg.py                shared plant helpers
 api/
-  main.py                    FastAPI backend (endpoints below)
-web_template/                React + Vite dashboard (see note on the folder name below)
-kpcl_energy.db                baseline scenario database (generated, ~85MB)
-kpcl_energy_optimized.db      optimized scenario database (generated, ~85MB)
-recommendations.csv           output of ml/recommendations.py (generated)
+  main.py                     FastAPI backend (endpoints below)
+  live.py                     simulated live replay (SSE), replay control, demo alerts
+  devconsole.py               dataset browser + glossary for the phone's developer console
+  reports.py                  per-plant management PDF
+web_template/                 React dashboard (see note on the folder name below)
+android/                      Kotlin phone app; android/dist/ holds a pre-built APK
+tests/                        backend tests (alerts, stream, forecast, developer console)
+run-demo.ps1                  one-command launcher (API + dashboard + firewall rule)
+HOW_TO_RUN.md                 run guide for the dashboard and the phone
+RELEASE_NOTES.md              notes published with the next GitHub Release
 DATABASE_AND_GENERATOR.md     full schema + generator module reference
+AGENT_CONTEXT.md              hand-off notes for developers / coding agents
+kpcl_energy.db                baseline scenario database (generated, ~100 MB, not in git)
+kpcl_energy_optimized.db      optimized scenario database (generated, ~100 MB, not in git)
+recommendations.csv, whatif_grid.csv, whatif_baseline.csv   generated ML outputs (in git)
 ```
 
 **On the `web_template/` folder name:** it should be `web/` per the original
@@ -56,6 +78,8 @@ code references the literal folder name.
 
 ## 3. How to run everything
 
+The fastest path is **[HOW_TO_RUN.md](HOW_TO_RUN.md)** (`run-demo.ps1`). By hand:
+
 ### 3.1 Generate the data (from the project root)
 
 ```bash
@@ -63,7 +87,7 @@ pip install numpy pandas pyyaml scikit-learn lightgbm fastapi uvicorn reportlab
 
 python build_db.py --scenario baseline      # -> kpcl_energy.db
 python build_db.py --scenario optimized     # -> kpcl_energy_optimized.db
-python validate.py                          # prints the 8-check PASS/FAIL table
+python validate.py                          # prints the PASS/FAIL table
 ```
 
 Each `build_db.py` run takes roughly 30–60 seconds (365 days × 1-minute
@@ -73,23 +97,24 @@ internal resolution, aggregated to 15 minutes).
 
 ```bash
 python ml/anomaly.py            # prints recall/precision/FPR vs fact_fault_label
-python -m ml.forecast          # walk-forward evaluation per plant vs last-week/climatology baselines
-python -m ml.recommendations    # writes recommendations.csv (~8 counterfactual sims, a few minutes)
+python -m ml.forecast           # walk-forward evaluation per plant vs last-week/climatology baselines
+python -m ml.recommendations    # writes recommendations.csv (counterfactual sims, a few minutes)
+python -m ml.whatif             # writes whatif_grid.csv / whatif_baseline.csv (a few minutes)
 ```
 
-`ml/recommendations.py` must be run as `python -m ml.recommendations` (not
-`python ml/recommendations.py`) so that `import build_db` resolves — it needs
-the project root on `sys.path`.
+Modules that import `build_db` or `ml.*` must be run with `python -m` from the
+project root so the imports resolve.
 
 ### 3.3 Start the API
 
 ```bash
-python -m uvicorn api.main:app --reload --port 8000
+python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
-Startup trains the forecast model and runs anomaly detection once (a few
-seconds) and caches both in memory. `recommendations.csv` must already exist
-(step 3.2) or `/recommendations` returns 503.
+The first start runs anomaly detection and the walk-forward forecasts (~1–2
+minutes) and caches the models in `.cache/`; later starts take ~10 seconds.
+Delete `.cache/` after changing the data or config. The running API needs
+about 0.5 GB of RAM.
 
 ### 3.4 Start the dashboard
 
@@ -99,8 +124,20 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-The dashboard talks to the API at `http://127.0.0.1:8000` by default; override
-with a `VITE_API_BASE_URL` env var if you run the API elsewhere.
+The dashboard talks to the API at `http://127.0.0.1:8000` by default; set
+`VITE_API_BASE_URL` if the API runs elsewhere.
+
+### 3.5 Tests
+
+```bash
+python -m pytest tests -q                       # backend (38 tests, ~3 min)
+cd android && gradle testDebugUnitTest          # phone app logic (16 tests)
+cd web_template && npx tsc -b --noEmit && npm run lint
+cd web_template && npx vitest run --browser.enabled=false --environment node src/lib/chart-insights.test.ts src/components/kpcl/facility
+```
+
+`npm test` runs the whole web suite in a real browser and needs
+`npm run test:browser:install` once.
 
 ---
 
@@ -115,21 +152,74 @@ before writing new queries against either `.db` file.
 
 ## 5. API endpoints
 
+Almost every endpoint takes `?plant=ALL|HADAPSAR|SASWAD|NASHIK` (default: the whole company).
+
 | Endpoint | Purpose |
 |---|---|
+| `GET /plants` | plants with contract demand (the switcher's options) |
 | `GET /kpis?plant=&from=&to=` | energy, cost, peak demand, Scope 1/2, intensity, solar share |
+| `GET /plants/compare` | per-plant energy, cost, emissions, peak vs contract, kWh/unit |
 | `GET /assets` | asset master (ratings, plant mapping) |
 | `GET /assets/{id}/series?from=&to=&res=15m\|1h\|1d` | any asset's time series |
-| `GET /plants/compare` | per-plant annual kWh (the only column genuinely split by site) |
 | `GET /production/daily` | daily units, shift split, energy-per-unit |
 | `GET /forecast/demand?plant=&date=` | day-ahead forecast for one day (default: the live replay's tomorrow): P10–P90 band, peak + breach risk, walk-forward metrics |
-| `GET /schedule/days?plant=&top_n=&rank_by=actual\|risk` | days by metered peak (default) or forecast breach risk, each with both |
-| `GET /anomalies?from=&to=&asset_id=` | flagged 15-min rows |
+| `GET /schedule/days?plant=&top_n=&rank_by=actual\|risk` | days by metered peak (default) or forecast breach risk |
+| `GET /schedule/plan?date=` | peak-shaving plan for one day |
+| `GET /anomalies?from=&to=&asset_id=` | flagged 15-min rows with per-asset severity |
 | `GET /anomalies/daily` | day × asset worst-severity grid (powers the fault timeline) |
+| `GET /losses/summary`, `GET /losses/leaks/daily` | leak and anomaly-excess costs |
 | `GET /recommendations` | ranked actions with real kWh/₹/tCO2 impact |
-| `GET /carbon/monthly` | monthly Scope 1/2/solar-avoided + fuel mix, as JSON |
-| `GET /carbon/report?format=csv\|pdf` | downloadable BRSR-style report |
+| `GET /whatif/grid` | what-if simulator levers and their simulated impact |
 | `GET /scenario/compare` | baseline vs optimized totals |
+| `GET /carbon/monthly` | monthly Scope 1/2/solar-avoided + fuel mix |
+| `GET /carbon/report?format=csv\|pdf` | downloadable BRSR-style report |
+| `GET /reports/plant` | ~4-page management PDF for a plant |
+| `GET /live/stream` | Server-Sent Events: one frame per replay tick, with alerts (`severity`, `kind`, stable `key`) |
+| `GET /live/snapshot?n=` | the last n frames, to backfill charts |
+| `POST /live/control` | pause / speed / jump the replay |
+| `GET /live/fault-windows` | labelled fault windows (for "Jump to fault" and the 3D view) |
+| `POST /live/simulate-alert` | raise a demo critical alert on every dashboard and phone |
+| `GET /dev/dataset`, `/dev/dataset/{table}`, `/dev/glossary` | every table and column explained, raw rows, glossary |
+
+---
+
+## 5a. Dashboard
+
+Pages: **Live Monitor, Plant Overview, Compressor Room, Refrigeration,
+Production, Carbon & ESG, Loss Tracker, Action Center**. The plant switcher in
+the top bar changes every page.
+
+- **Every chart explains itself.** Click any chart or diagram (or its ⓘ) for a
+  card with what it shows, how to read it, and what the data on screen right now
+  implies (computed from that data). Includes the What-if simulator and the
+  baseline vs optimized toggle.
+- **3D Facility View** (Live Monitor): rooms and machines per plant, coloured
+  by live state (running / idle / off / fault), click a machine for its details;
+  fault windows are drawn (furnace door open, CNC idle drift, weekend base-load
+  waste lights the room amber). Scroll-zoom only after clicking into it.
+  three.js loads on demand, outside the main bundle.
+- **Day-ahead forecast** card (Plant Overview): the replay's tomorrow with an
+  80% range, peak and breach risk.
+
+## 5b. Phone app
+
+`android/` — see [android/README.md](android/README.md). It notifies and
+vibrates **only for critical conditions**: a contract demand breach (once per
+episode), a machine abnormal for 24 hours straight, or the dashboard's
+"Simulate critical alert". Everything else is shown silently. Includes a
+developer console (live fields, every dataset table explained, glossary).
+
+## 5c. Releases and deployment
+
+- Releases: tag a commit `v*` and push the tag; `.github/workflows/build-apk.yml`
+  builds the APK and publishes a GitHub Release using `RELEASE_NOTES.md`.
+- Deployment: the API must run as **one always-on process** (the replay clock
+  and the phone's live connection live in memory), with the two databases on
+  disk and ~0.5–1 GB RAM — a small VPS (Mumbai/Bangalore region) with Caddy for
+  https fits; serverless hosts do not. The dashboard is static files
+  (`npm run build`) and can be served from the same machine.
+  **The API has no authentication** — protect `/live/control` and
+  `/live/simulate-alert` before exposing it publicly.
 
 ---
 
@@ -276,9 +366,18 @@ this table is a convenience index, not a separate source of truth.
   import (`generator/plants.py`), which swings far more day to day (CV 0.62)
   than Nashik's own metered load (CV 0.18). Its daily-energy forecast error
   (~43%) reflects that allocation, not the plant
-- Browser QA is partial: the plant overview forecast card is checked headless (Playwright) per plant;
-  other pages were verified via TypeScript compilation, a production build and API tests
-  only. Worth a manual look before treating the UI as final
+- The Production page's "Monthly units vs plant energy" chart draws units only;
+  energy is summarised in its click-to-explain card (kWh per unit), not plotted
+- The Overview's solar chart is a flat step with little day-to-day variation — a
+  limitation of the solar model, said so in its explanation card
+- Not production-ready: no authentication, open CORS, no rate limiting, SQLite
+  files in the working directory
+- Web lint has one pre-existing error in the live-stream hook
+  (`use-kpcl.ts`, setState in an effect), so `npm run lint` exits non-zero
+- Browser QA: every chart explanation, the forecast card, the what-if popups and
+  the 3D facility view are checked headless (Playwright, 66 checks) on desktop
+  and at phone width; the template's top bar is still ~11 px too wide at 390 px.
+  The phone app is tested on an emulator, not yet on a physical phone
 
 ---
 

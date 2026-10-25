@@ -21,8 +21,10 @@ quoted as if it were real KPCL data.
 
 All originally planned stages are complete, and the following were added later:
 live replay monitor, peak-shaving planner, loss tracker, what-if simulator,
-per-plant dashboards/reports, Android app, one-command demo launcher. It is a
-"understand what exists, then do what the user asks next" handoff.
+per-plant dashboards/reports, Android app (v2: critical-only alerts + developer console),
+one-command demo launcher, walk-forward forecasting, click-to-explain on every chart, and a
+3D facility view. Released as GitHub Releases v2.0 and v2.1. It is a "understand what exists,
+then do what the user asks next" handoff.
 
 ## How to run it (details in HOW_TO_RUN.md)
 
@@ -42,6 +44,10 @@ server address on the user's laptop hotspot: `http://192.168.137.1:8000`.
   later starts seconds. Delete `.cache/` to retrain.
 - **The user prefers to run commands themselves** ("give me the command, I'll run it"). Don't
   launch the demo script, servers, or git pushes on their behalf unless they ask; implement, then give the command.
+  They have explicitly asked for commits and GitHub releases before — do those only when asked.
+- The user's own API/dashboard often run on 8000/5173. For your own testing use other ports
+  (e.g. API 8001, `VITE_API_BASE_URL=http://127.0.0.1:8001 ./node_modules/.bin/vite --port 5179` run from
+  `web_template/` — plain `npx vite` from elsewhere silently serves an empty root) and stop them after.
 - Shell tooling gotcha: Python snippets with apostrophes/`'''` inside a Bash heredoc break the
   tool's quoting — write patch scripts to a file with the Write tool and run them instead.
 
@@ -69,10 +75,17 @@ ml/
 api/
   main.py                    FastAPI backend; almost every endpoint takes ?plant=<id>|ALL
   live.py                    simulated live replay (SSE) + control + demo alert injection
+  devconsole.py              /dev/*: every table + column explained, raw rows, glossary (phone developer console)
   reports.py                 detailed per-plant management PDF
+tests/                       pytest: live alerts/stream/control, forecast (incl. no-leakage), dev console
 web_template/                React 19 + Vite + TanStack Router + Tailwind v4 dashboard (plain tracked files now)
+  src/components/kpcl/chart-explainer.tsx   click-to-explain wrapper + dialog for every chart
+  src/lib/chart-explanations.ts             one builder per chart (what it shows / how to read / what data says)
+  src/lib/chart-insights.ts                 shared stats + wording helpers (summarize, trendPhrase, ...)
+  src/components/kpcl/facility/             3D facility view: data (pure, tested), models, scene (lazy), panel
 android/                     native Kotlin phone app (see below); APK in android/dist/
-.github/workflows/build-apk.yml   builds the APK on GitHub; tag v* publishes a Release
+.github/workflows/build-apk.yml   builds the APK on GitHub; tag v* publishes a Release with RELEASE_NOTES.md as its text
+RELEASE_NOTES.md             text of the NEXT release — rewrite it before tagging
 run-demo.ps1 / HOW_TO_RUN.md      launcher + run guide
 kpcl_energy[_optimized].db   generated, ~100 MB each, NOT in git (rebuild with build_db.py)
 recommendations.csv whatif_grid.csv whatif_baseline.csv   generated; carry a plant_id column
@@ -127,6 +140,27 @@ faults, only the **policy** differs (`config.yaml` `policy:` block).
     critical) — fixed score bins put all 40k flagged rows in "critical" and paged the phone every few
     seconds. An anomaly START is never critical; it escalates to critical only at 24 h of persistence.
 
+## Dashboard: chart explanations and 3D facility view (2026-10-25)
+
+- **Every chart is click-to-explain.** `TrendChart` has a *required* `explain` prop, so a new chart
+  will not compile without one; custom diagrams (forecast card, pressure sawtooth, kW/TR gauge, plant
+  comparison, fault timeline, live kW sparkline, what-if simulator, baseline vs optimized) are wrapped in
+  `ChartExplainer` directly. Explanations are built when the card opens, from the data on screen. Write
+  new ones in `lib/chart-explanations.ts`; keep the "simulation" footer.
+- `ChartExplainer` ignores clicks on controls (`button`, `a`, `select`, `[role=combobox|tab]`,
+  `[data-no-explain]`) and clicks that bubble out of portals (Radix select menus) — React forwards
+  portal events to the wrapper, which used to open the card when a what-if option was picked.
+- **3D Facility View** (`components/kpcl/facility/`) sits on the Live Monitor, right of the Assets card
+  (`lg:grid-cols-5`, 3+2). `facility-scene.tsx` is lazy-loaded (three.js is its own ~945 kB chunk).
+  Data: `useFacilityState(plant)` polls `/live/snapshot?n=1` every 2 s plus `/assets` and
+  `/live/fault-windows`, independent of the global plant switcher; `buildFacility()` (pure, unit-tested)
+  maps them to rooms/machines. Status: labelled fault window active -> fault; else meter state
+  (cutting/ramp/hold running, idle/cooldown idle, off) else kW vs rated. Fault windows have date-only
+  ends — they cover the whole end day. Weekend base-load waste lights the room amber only on Sat/Sun.
+- Labels are plain DOM elements positioned each frame from the camera (`LabelProjector`). **Don't use
+  drei `<Html>`**: each one is its own React root and unmounting them mid-render logs React 19 errors.
+- Scroll-zoom is disabled until the user clicks into the canvas (page scroll not hijacked).
+
 ## Known open issues
 
 - **`validate.py` is 8/9**: night base load ~43% of day load vs 15–25% target (compressed-air
@@ -152,6 +186,12 @@ faults, only the **policy** differs (`config.yaml` `policy:` block).
 - Not production-ready: no auth, SQLite files in the working dir, open CORS, no rate limiting.
 - web_template's original nested `.git` (shadcn-admin upstream) was moved to
   `.web_template_git_backup/` (git-ignored) so the dashboard source is tracked normally.
+  Unused template files (data-table, brand icons, upstream .github/CHANGELOG/cz.yaml, etc.) were removed
+  on 2026-10-25; `npx knip` reports no unused files. It still lists unused npm dependencies
+  (zod, zustand, date-fns, react-day-picker, ...) — removable if wanted. Keep `web_template/LICENSE` (MIT).
+- `npm run lint` has one pre-existing error: setState inside an effect in `useLiveStream` (`use-kpcl.ts`).
+- Production page "Monthly units vs plant energy" plots units only (energy is in its explain card).
+- At 390 px the template's top bar (search + theme toggle) is still ~11 px too wide.
 
 ## Phone app (android/)
 
@@ -168,12 +208,15 @@ until ACKNOWLEDGE / 2 min. Frames carry `status` and alerts carry `kind` + stabl
 `DevConsoleActivity` = developer console (live fields / dataset / glossary from `api/devconsole.py`;
 `tests/` checks every DB column has an explanation, so new columns must be added to `TABLES`).
 v2.0 tested on the Pixel_6 AVD with a scripted adb/uiautomator run tapping every button (55/55 checks).
-Icon: bolt-in-ring adaptive vector (+ monochrome layer), no PNGs.
+uiautomator cannot dump a screen that keeps redrawing ("could not get idle state"): pause the replay via
+`/live/control` while dumping. Icon: bolt-in-ring adaptive vector (+ monochrome layer), no PNGs.
 - Build: `cd android && gradle assembleDebug` (JDK 17+/21, Android SDK, AGP 8.7.2, Kotlin 2.0.21,
-  Gradle 8.9; `local.properties` needs forward slashes: `sdk.dir=C:/Users/...`). Local build uses
-  Android Studio's JBR as JAVA_HOME. CI builds on GitHub; tag `v1.x` -> Release with
-  `KPCL-Plant-Alert.apk`. Released so far: `v1.0` (an older build); the nicer-UI/vibration-fix/
-  welcome-screen build exists only in `android/dist/` until pushed + tagged.
+  Gradle 8.9 from `~/.gradle/wrapper/dists/gradle-8.9-bin/...`; `local.properties` needs forward slashes).
+  Local build uses Android Studio's JBR as JAVA_HOME. Unit tests: `gradle testDebugUnitTest` (16).
+- Releases: `v1.0` (old), `v2.0` (critical-only app, forecasting), `v2.1` (chart explanations + 3D view;
+  app code unchanged, versionName 2.1 / versionCode 6). Flow used: branch -> push -> the user merges the
+  PR on GitHub -> tag `vX.Y` on the merged commit -> CI publishes the APK. `gh` is not installed; watch
+  runs via `https://api.github.com/repos/VedantM47/KPCL_hackathon/actions/runs`.
 - Tested on the Pixel_6 AVD (API 33, `-no-window`, WHPX): live status, breach alert, ack, server-down
   alert + reconnect, welcome/main/launcher-icon visuals. **Not tested on a physical phone**; alarm
   loudness untested (emulator has no audio). Emulator reaches the host at `10.0.2.2`.
@@ -182,8 +225,9 @@ Icon: bolt-in-ring adaptive vector (+ monochrome layer), no PNGs.
 
 - Dashboard Live Monitor: pause/play, 1x/4x/16x, "Jump to fault…", and a red **Simulate critical
   alert** button → `POST /live/simulate-alert` → every connected SSE client (web + phone) gets a
-  `demo: true` frame with a unique `DEMO-n` asset id (unique so the app's per-key cooldown never swallows it).
-- App: Test alert (local) and Jump to peak day (`/schedule/days` + `/live/control`).
+  `demo: true` frame whose alert has `kind: "demo"` and a unique `key: "demo:n"`, so each one pages once.
+- App: Test critical alert (local) and Jump to peak day (`/schedule/days?top_n=1` + `/live/control`).
+  `/schedule/days` must keep ranking by *metered* peak by default for this to land on a real breach.
 - `run-demo.ps1 -Breach` jumps the replay to the highest-demand day.
 
 ## Reports
@@ -218,5 +262,14 @@ If you change the data/config, delete `.cache/` so the models retrain.
 - **"the numbers look wrong"** — README.md section 6 first; probably a documented assumption.
 - **"change the phone app"** — Kotlin sources in `android/app/src/main/java/com/kpcl/plantalert/`; rebuild,
   copy to `android/dist/`, then give the user the commit/push/tag commands.
-- **"deploy / production-ready"** — it isn't; flag the issues above plainly.
+- **"add a chart"** — `TrendChart` requires `explain`; add a builder to `lib/chart-explanations.ts`
+  (and a vitest case in `lib/chart-insights.test.ts` if it has logic).
+- **"deploy / production-ready"** — it isn't (no auth on `/live/control` and `/live/simulate-alert`,
+  open CORS). Measured: API ~460 MB RSS running, ~11 s start with `.cache`, two ~100 MB DBs. It must be
+  ONE always-on process (replay clock + SSE in memory): a small VPS (India region) + Caddy fits; serverless
+  and sleeping free tiers do not. The dashboard is static (`npm run build`).
 - **Browser QA** — headless Playwright (python) + Chromium works here; screenshots under the session scratchpad.
+  Pages with the live stream never reach `networkidle` (use `load` + a wait); WebGL needs
+  `--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader`. Web vitest runs in a real browser
+  (`npm test`, needs `npm run test:browser:install`); pure-logic tests also run with
+  `npx vitest run --browser.enabled=false --environment node <files>`.
