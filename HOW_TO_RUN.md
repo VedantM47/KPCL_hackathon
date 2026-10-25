@@ -39,11 +39,16 @@ Later starts load them in a few seconds. Delete the `.cache` folder to force a r
 - Open **http://localhost:5173** (the script opens it for you).
 - The **plant switcher** in the top bar (All plants / Hadapsar / Saswad / Nashik) changes every page.
 - Pages: Live Monitor, Plant Overview, Compressor Room, Refrigeration, Production, Carbon & ESG, Loss Tracker, Action Center.
+- **Click any chart** (or the ⓘ in its corner) for a card explaining what it shows, how to read it, and what the
+  current data means. Works on every chart, the What-if simulator and Baseline vs optimized.
 
 ### Live Monitor (the demo page) - http://localhost:5173/live
 - Shows the plant "live": the server replays a year of data at accelerated speed (1 tick = 15 simulated minutes, one tick per second by default).
 - Pause/play, **1x / 4x / 16x** speed, and **Jump to fault...** to move the replay to a planted fault.
-- **Simulate critical alert** (red button): instantly raises a critical alert on the dashboard **and on every connected phone** (beep + notification). Use it for demonstrations.
+- **Simulate critical alert** (red button): instantly raises a critical alert on the dashboard **and on every connected phone** (notification + vibration + alarm). Use it for demonstrations.
+- **Facility View** (right of Assets): a 3D view of each plant's rooms and machines, coloured green (running),
+  yellow (idle), red pulsing (fault). Switch Hadapsar / Saswad / Nashik with the tabs; click a machine for its
+  details; click inside the view first to enable scroll-zoom.
 
 ### Reports
 - **Plant report PDF** button (Overview, Action Center, Carbon pages): a ~4-page management report for the selected plant, or the whole company, with a sign-off block.
@@ -59,7 +64,7 @@ Pick one:
 - **From this laptop:** copy `android\dist\KPCL-Plant-Alert-debug.apk` to the phone (USB, Drive, WhatsApp to yourself...), open it, allow "install unknown apps". Installing over an older version keeps your settings.
 - **From GitHub:** after you push and tag a release (section 5), download
   `https://github.com/VedantM47/KPCL_hackathon/releases/download/<tag>/KPCL-Plant-Alert.apk` on the phone.
-  Latest tag used so far: `v1.0`.
+  Latest release: `v2.1` — or just open https://github.com/VedantM47/KPCL_hackathon/releases/latest
 
 When asked, **allow notifications**.
 
@@ -75,29 +80,29 @@ The phone only talks to your laptop's API, so it must be on the same network.
 
 **Same Wi-Fi router instead of hotspot:** use the laptop's Wi-Fi IP (`ipconfig` -> IPv4), e.g. `http://192.168.1.23:8000`.
 
-**Android emulator:** the default `http://10.0.2.2:8000` reaches the host machine.
+**Android emulator:** use `http://10.0.2.2:8000` to reach the host machine.
 
 ### 3c. Use it
-1. Enter the server address -> **Save & load plants**.
-2. Pick the plant to watch and the alert level (Everything / High and critical / Critical only).
-3. Press **START MONITORING**. The header badge turns **LIVE** and the card shows kVA and % of contract.
-4. Press **Test alert** to check sound and vibration on the phone.
+1. Enter the server address -> **Save & connect** (it says how many plants it found).
+2. Pick the plant to watch. Leave **Alarm sound** on unless you want vibration only.
+3. Press **START MONITORING**. The header badge turns **LIVE** and the card shows kVA, % of contract and status.
+4. Press **Test critical alert** to feel the alarm and vibration; **Jump to peak day** makes the replay hit a real breach.
+5. **Developer console** shows every live value and every dataset column, explained.
 
-### What triggers an alert
-| Condition | Level |
+### What triggers an alert — critical only
+| Condition | Notification + vibration? |
 |---|---|
-| Contract demand breached | critical |
-| Demand above 85% of contract | high |
-| Power factor under 0.90 | medium |
-| A machine anomaly starts (max one alert per 90 s) | as scored, mostly critical |
-| Compressed-air leak wasting more than Rs 100/hour | high |
-| Server unreachable for over a minute | high |
-| **Simulate critical alert** button on the dashboard | critical |
+| Contract demand breached | **yes**, once per breach (again only after it has been clear for over an hour of replay) |
+| A machine abnormal for 24 hours straight | **yes**, once per fault |
+| **Simulate critical alert** button on the dashboard | **yes** |
+| Demand above 85% of contract | no — shown as "Watch" on the live card |
+| Power factor, anomaly start, air leak | no — see the dashboard |
+| Server unreachable for over a minute | no — the app shows **NO DATA** |
 
 ### On-call behaviour
-- **Critical:** looping alarm sound + repeating vibration until you tap **ACKNOWLEDGE** (notification button or the red banner in the app). Also stops after 2 minutes or when you press STOP MONITORING. The notification stays, wakes the screen and shows over the lock screen.
-- **High:** a single beep and a notification.
-- To ring through **Do Not Disturb**: Settings -> Apps -> KPCL Plant Alert -> Notifications -> Plant alerts -> Override Do Not Disturb.
+- **Critical:** repeating vibration (works in silent mode) + looping alarm sound (if Alarm sound is on) until you tap **ACKNOWLEDGE** (notification button or the red banner in the app). Also stops after 2 minutes or when you press STOP MONITORING. The notification stays, wakes the screen and shows over the lock screen.
+- Nothing else notifies or vibrates.
+- To ring through **Do Not Disturb**: Settings -> Apps -> KPCL Plant Alert -> Notifications -> Critical plant alerts -> Override Do Not Disturb.
 - If alerts stop with the screen off (Xiaomi / Oppo / Samsung power saving): set the app's battery usage to **Unrestricted**.
 
 ---
@@ -133,17 +138,20 @@ Get-NetTCPConnection -LocalPort 8000,5173 -State Listen | Select -Expand OwningP
 ## 5. Building a new APK
 
 **On GitHub (no Android tools needed):**
+1. Bump `versionCode` / `versionName` in `android/app/build.gradle.kts` and rewrite `RELEASE_NOTES.md`
+   (it becomes the release page text).
+2. Commit, push, and get it onto `main` (merge the pull request on GitHub).
+3. Tag and push the tag:
 ```powershell
 cd C:\Users\imved\OneDrive\Desktop\KPCL
-git add -A
-git commit -m "your message"
-git push origin main
-git tag v1.1
-git push origin v1.1
+git checkout main
+git pull
+git tag v2.2
+git push origin v2.2
 ```
 The workflow `.github/workflows/build-apk.yml` builds the app. About 3 minutes later the APK is at
-`https://github.com/VedantM47/KPCL_hackathon/releases/download/v1.1/KPCL-Plant-Alert.apk`
-(also under the repo's **Actions** tab as an artifact). Use a new tag each time (`v1.2`, ...).
+`https://github.com/VedantM47/KPCL_hackathon/releases/download/v2.2/KPCL-Plant-Alert.apk`
+(also under the repo's **Actions** tab as an artifact). Use a new tag each time. Released so far: v1.0, v2.0, v2.1.
 
 **Locally** (needs Android SDK + JDK 17+):
 ```powershell
