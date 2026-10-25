@@ -17,3 +17,6 @@ web_template/node_modules/
 web_template/dist/
 # backup of the template's original git metadata (kept out of the repo)
 .web_template_git_backup/
+
+# trained-model cache
+.cache/

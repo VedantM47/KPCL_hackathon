@@ -1,7 +1,8 @@
 """Peak-shaving schedule recommender.
 
-For a given day it takes the plant's kVA profile (the day-ahead forecast when
-the forecaster covers that day, otherwise the metered actuals as a backcast),
+For a given day it takes the plant's kVA profile (the walk-forward day-ahead
+forecast, which covers every day from March; before that there is too little
+history and the metered actuals are used, labelled as such),
 finds the peak, and searches for time shifts of the schedulable loads (CNG test
 rig, heat-treatment furnace, paint booth) that lower it. Each candidate shift
 is scored on the new peak kVA and on the ToD energy-cost change. Also flags
@@ -30,6 +31,7 @@ SHIFTABLE = {
 }
 CNC_ID = "CNC-GEAR-01"
 RISK_THRESHOLD = 0.85   # fraction of contract demand
+NO_FORECAST = "actual (no forecast: insufficient history)"
 
 
 def _hhmm(s):
@@ -51,7 +53,8 @@ def tod_rate_array(config):
 
 
 class PeakPlanner:
-    def __init__(self, conn, config, forecast_test=None, plant_id=None):
+    def __init__(self, conn, config, forecast=None, plant_id=None):
+        """``forecast`` is a run_forecast() result (or, for older callers, its interval DataFrame)."""
         plant_id = plant_cfg.norm(plant_id)
         self.plant_id = plant_id
         self.plant_assets = plant_cfg.assets_of(config, plant_id)
@@ -69,10 +72,15 @@ class PeakPlanner:
         self.mm = mm
 
         self.forecast_kva = {}
-        if forecast_test is not None:
-            ft = forecast_test[["ts", "pred_kva"]].copy()
+        self.forecast_days = {}
+        if forecast is not None:
+            intervals = forecast["intervals"] if isinstance(forecast, dict) else forecast
+            ft = intervals[["ts", "pred_kva"]].copy()
             ft["date"] = ft["ts"].dt.strftime("%Y-%m-%d")
             self.forecast_kva = {d: g["pred_kva"].to_numpy() for d, g in ft.groupby("date") if len(g) == STEPS_PER_DAY}
+            if isinstance(forecast, dict) and "days" in forecast:
+                fd = forecast["days"]
+                self.forecast_days = {d.strftime("%Y-%m-%d"): r for d, r in fd.iterrows()}
 
         meter = pd.read_sql("SELECT ts, asset_id, kW, state FROM fact_meter ORDER BY ts", conn)
         meter["date"] = pd.to_datetime(meter["ts"]).dt.strftime("%Y-%m-%d")
@@ -92,20 +100,34 @@ class PeakPlanner:
             return None
         if date in self.forecast_kva:
             return self.forecast_kva[date], "forecast", g
-        return g["kVA"].ffill().fillna(0.0).to_numpy(), "actual (backcast)", g
+        return g["kVA"].ffill().fillna(0.0).to_numpy(), NO_FORECAST, g
 
-    def risk_days(self, top_n=40):
+    def risk_days(self, top_n=40, rank_by="actual"):
+        """Days ranked by metered peak ("actual": what really happened, e.g. to replay the worst day)
+        or by forecast breach risk then P90 peak ("risk": what the planner would have warned about)."""
         if self._days_summary is None:
             rows = []
-            for date in self.day_cache:
-                kva, source, _ = self._profile(date)
-                rows.append({"date": date, "peak_kva": float(np.nanmax(kva)), "source": source})
+            for date, g in self.day_cache.items():
+                f = self.forecast_days.get(date)
+                rows.append({
+                    "date": date, "peak_kva": float(g["kVA"].max()),
+                    "source": "forecast" if date in self.forecast_kva else NO_FORECAST,
+                    "forecast_peak_kva": None if f is None else round(float(f["peak_p50_kva"]), 1),
+                    "forecast_peak_p90_kva": None if f is None else round(float(f["peak_p90_kva"]), 1),
+                    "breach_risk": None if f is None else round(float(f["breach_risk"]), 3),
+                })
             df = pd.DataFrame(rows)
             df["contract_pct"] = df["peak_kva"] / self.contract_kva
-            self._days_summary = df.sort_values("peak_kva", ascending=False).reset_index(drop=True)
-        out = self._days_summary.head(top_n).copy()
+            self._days_summary = df
+        df = self._days_summary
+        if rank_by == "risk":
+            df = df.sort_values(["breach_risk", "forecast_peak_p90_kva"], ascending=False, na_position="last")
+        else:
+            df = df.sort_values("peak_kva", ascending=False)
+        out = df.head(top_n).copy()
         out["peak_kva"] = out["peak_kva"].round(1)
         out["contract_pct"] = out["contract_pct"].round(4)
+        out = out.astype(object).where(out.notna(), None)
         return out.to_dict(orient="records")
 
     # -- planning ---------------------------------------------------------

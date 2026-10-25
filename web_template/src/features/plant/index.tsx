@@ -1,15 +1,15 @@
-import { useMemo } from 'react'
 import { FileText, Factory, Leaf, Sun, Zap } from 'lucide-react'
 import { usePlant } from '@/context/plant-context'
 import { useAssetSeries, useForecastDemand, useKpis, usePlantsCompare } from '@/hooks/use-kpcl'
 import { kpclApi } from '@/lib/kpcl-api'
-import { fmtKwh, fmtPct, fmtRupees, fmtTco2, fmtTime } from '@/lib/format'
+import { fmtKwh, fmtPct, fmtRupees, fmtTco2 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { KpiCard } from '@/components/kpcl/kpi-card'
 import { PageShell } from '@/components/kpcl/page-header'
+import { ForecastCard } from '@/components/kpcl/forecast-card'
 import { TrendChart } from '@/components/kpcl/trend-chart'
 
 export function PlantOverview() {
@@ -26,10 +26,6 @@ export function PlantOverview() {
 
   const contractKva = kpis?.contract_kva
   const peakRisk = kpis && contractKva ? kpis.peak_demand_kva / contractKva : undefined
-  const forecastData = useMemo(
-    () => forecast?.last_24h.map((f) => ({ ts: f.ts, actual: f.kW, forecast: f.pred_kw })) ?? [],
-    [forecast]
-  )
   const maxKwh = plants ? Math.max(...plants.map((p) => p.kwh_total)) : 1
 
   return (
@@ -154,35 +150,7 @@ export function PlantOverview() {
           </CardContent>
         </Card>
 
-        <Card className='lg:col-span-2'>
-          <CardHeader className='pb-2'>
-            <CardTitle className='text-sm font-medium'>Day-ahead load forecast (kW)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {!forecast ? (
-              <Skeleton className='h-48 w-full' />
-            ) : (
-              <>
-                <TrendChart
-                  data={forecastData}
-                  xKey='ts'
-                  variant='line'
-                  yMin={0}
-                  yUnit=' kW'
-                  height={180}
-                  xTickFormatter={fmtTime}
-                  series={[
-                    { key: 'actual', label: 'Actual', color: 'neutral' },
-                    { key: 'forecast', label: 'Forecast', color: 'brand' },
-                  ]}
-                />
-                <p className='text-muted-foreground mt-1 text-[11px]'>
-                  Test WAPE {forecast.metrics.wape_pct.toFixed(0)}% vs {forecast.metrics.naive_climatology_wape_pct.toFixed(0)}% naive
-                </p>
-              </>
-            )}
-          </CardContent>
-        </Card>
+        <ForecastCard forecast={forecast} className='lg:col-span-2' />
       </div>
 
       {(plant === 'ALL' || ownsSolar) && (

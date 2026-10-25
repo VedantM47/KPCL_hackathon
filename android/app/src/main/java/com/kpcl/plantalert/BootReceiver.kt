@@ -4,14 +4,15 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 
-/** Restarts monitoring after a reboot if it was switched on. */
+/** Restarts monitoring after a reboot or app update if it was switched on. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED && Prefs.monitoring(context)) {
+        val a = intent.action
+        if ((a == Intent.ACTION_BOOT_COMPLETED || a == Intent.ACTION_MY_PACKAGE_REPLACED) && Prefs.monitoring(context)) {
             try {
-                context.startForegroundService(Intent(context, MonitorService::class.java))
+                MonitorService.start(context)
             } catch (_: Exception) {
-                // some OEM builds refuse background starts; the user can reopen the app
+                // some OEM builds refuse background starts; opening the app restarts monitoring
             }
         }
     }

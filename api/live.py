@@ -8,6 +8,7 @@ Frames are built per plant (ALL = whole company, or one plant_id).
 """
 import asyncio
 import json
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -21,10 +22,23 @@ from ml import plant_cfg
 router = APIRouter(prefix="/live", tags=["live"])
 
 DATA_LABEL = "simulated live replay (benchmark-calibrated simulation)"
-SEVERITY_BINS = [-float("inf"), 0, 0.1, 0.2, float("inf")]
 SEVERITY_LABELS = ["low", "medium", "high", "critical"]
+# an anomaly only becomes critical once it has lasted 24 h without a break: in this dataset every such
+# run is a real labelled fault, while shorter runs are mostly CNC-rule noise (~35% real)
+SUSTAINED_INTERVALS = 96
 COMPRESSORS = ("CMP-CENT-01", "CMP-SCR-01", "CMP-REC-01")
 ENGINE = {}
+
+
+def score_severity(flagged):
+    """Severity of flagged anomaly rows from the score's rank within its own asset.
+
+    Isolation-Forest scores sit around 0.4-0.8 and are not comparable across assets, so fixed
+    bins put every flagged row in "critical". Ranking within the asset keeps the bands meaningful:
+    top 5% critical, next 15% high, next 30% medium, the rest low.
+    """
+    pct = flagged.groupby("asset_id")["anomaly_score"].rank(pct=True)
+    return pd.cut(pct, [0, 0.5, 0.8, 0.95, 1.0], labels=SEVERITY_LABELS, include_lowest=True).astype(str)
 
 
 def _r(x, d):
@@ -98,25 +112,35 @@ class LiveEngine:
         self.pf_floor = float(config["tariff"].get("pf_penalty_below", 0.90))
 
         flagged = anomalies[anomalies["final_flag"]].copy()
-        flagged["severity"] = pd.cut(flagged["anomaly_score"], bins=SEVERITY_BINS,
-                                     labels=SEVERITY_LABELS).astype(str)
-        self.anomalies_by_idx = {}
+        flagged["severity"] = score_severity(flagged)
         idx_of = pd.Series(np.arange(self.n), index=self.ts)
         flagged["idx"] = idx_of.reindex(flagged["ts"]).to_numpy()
         flagged = flagged.dropna(subset=["idx"])
-        flagged_keys = set(zip(flagged["asset_id"], flagged["idx"].astype(int)))
-        # a fault flags long runs of consecutive intervals; alert once, when a run starts,
-        # otherwise the ticker would repeat the same alert every tick
-        for r in flagged.itertuples():
-            i = int(r.idx)
-            if (r.asset_id, i - 1) in flagged_keys:
-                continue
-            run = 1
-            while (r.asset_id, i + run) in flagged_keys:
-                run += 1
-            self.anomalies_by_idx.setdefault(i, []).append(
-                {"asset_id": r.asset_id, "severity": r.severity, "score": _r(r.anomaly_score, 3), "run_len": run,
-                 "source": "model+rule" if r.model_flag and r.rule_flag else ("rule" if r.rule_flag else "model")})
+        flagged["idx"] = flagged["idx"].astype(int)
+        # alerts that happen once (anomaly start, sustained-anomaly escalation), keyed by tick index
+        self.events_by_idx = {}
+        for asset_id, g in flagged.groupby("asset_id"):
+            g = g.sort_values("idx")
+            idxs = g["idx"].to_numpy()
+            run_id = np.cumsum(np.diff(idxs, prepend=idxs[0] - 2) != 1)
+            for _, run in g.groupby(run_id):
+                start, n = int(run["idx"].iloc[0]), len(run)
+                first = run.iloc[0]
+                src = "model+rule" if first.model_flag and first.rule_flag else ("rule" if first.rule_flag else "model")
+                # a fresh anomaly is worth seeing, not worth waking someone: never critical at the start
+                sev = "high" if first.severity == "critical" else first.severity
+                self.events_by_idx.setdefault(start, []).append({
+                    "asset_id": asset_id, "severity": sev, "kind": "anomaly", "source": src,
+                    "score": _r(first.anomaly_score, 3), "key": f"anomaly:{asset_id}:{start}",
+                    "message": f"{asset_id} anomaly started ({src}, score {_r(first.anomaly_score, 3)})"})
+                # escalates when the run reaches 24 h, i.e. only what is known at that tick (no look-ahead)
+                if n >= SUSTAINED_INTERVALS:
+                    head = run.iloc[:SUSTAINED_INTERVALS]
+                    at = start + SUSTAINED_INTERVALS - 1
+                    self.events_by_idx.setdefault(at, []).append({
+                        "asset_id": asset_id, "severity": "critical", "kind": "anomaly_sustained", "source": src,
+                        "score": _r(head["anomaly_score"].max(), 3), "key": f"anomaly24h:{asset_id}:{start}",
+                        "message": f"{asset_id} has been abnormal for 24 hours straight - inspect the machine"})
 
         faults = q("SELECT asset_id, fault_type, start_ts, end_ts FROM fact_fault_label WHERE label_class='fault'")
         self.fault_windows = faults.to_dict(orient="records")
@@ -124,32 +148,45 @@ class LiveEngine:
         self.idx = 0
         self.ticks_per_sec = 1.0
         self.paused = False
+        self.injected = []   # (seq, alert) pushed by /live/simulate-alert for demonstrations
+        self.inject_seq = 0
 
-    def frame(self, i, plant=plant_cfg.ALL):
+    def frame(self, i, plant=plant_cfg.ALL, event_from=None):
+        """One tick for one plant. Events (anomaly starts) in (event_from, i] are included too, so a
+        client that skipped a few ticks at high replay speed does not lose them."""
         i = int(i) % self.n
         s = self.series[plant]
         contract_kva = s["contract"]
         kva, pf = float(s["kva"][i]), float(s["pf"][i])
         contract_pct = kva / contract_kva
         alerts = []
+        status = "normal"
+        # conditions repeat on every tick while they last; "key" lets clients page once per episode
         if contract_pct > 1.0:
-            alerts.append({"asset_id": "PLANT", "severity": "critical", "source": "rule",
-                           "message": f"Contract demand breached: {kva:.0f} kVA vs {contract_kva:.0f}"})
+            status = "critical"
+            alerts.append({"asset_id": "PLANT", "severity": "critical", "kind": "breach", "source": "rule",
+                           "key": f"breach:{plant}",
+                           "message": f"Contract demand breached: {kva:.0f} kVA vs {contract_kva:.0f} kVA contract"})
         elif contract_pct > 0.85:
-            alerts.append({"asset_id": "PLANT", "severity": "high", "source": "rule",
-                           "message": f"Demand at {contract_pct * 100:.0f}% of contract"})
+            status = "watch"
+            alerts.append({"asset_id": "PLANT", "severity": "high", "kind": "near_contract", "source": "rule",
+                           "key": f"near:{plant}", "message": f"Demand at {contract_pct * 100:.0f}% of contract"})
         if pf < self.pf_floor:
-            alerts.append({"asset_id": "PLANT", "severity": "medium", "source": "rule",
+            alerts.append({"asset_id": "PLANT", "severity": "medium", "kind": "low_pf", "source": "rule",
+                           "key": f"pf:{plant}",
                            "message": f"Power factor {pf:.2f} below {self.pf_floor:.2f} (penalty band)"})
-        for a in self.anomalies_by_idx.get(i, []):
-            if a["asset_id"] in s["asset_ids"]:
-                alerts.append({**a, "message": f"{a['asset_id']} anomaly starts ({a['source']}, score {a['score']}, lasts {a['run_len'] * 15} min)"})
+        lo = event_from + 1 if event_from is not None and 0 < i - event_from <= 8 else i
+        for j in range(lo, i + 1):
+            for a in self.events_by_idx.get(j, []):
+                if a["asset_id"] in s["asset_ids"]:
+                    alerts.append(a)
 
         lead = self.comp.get(s["lead_comp"]) if s["lead_comp"] else None
         return {
             "idx": i,
             "ts": str(self.ts.iloc[i]),
             "plant_id": plant,
+            "status": status,
             "plant": {"kW": _r(s["kw"][i], 2), "kVA": _r(kva, 2),
                       "pf": _r(pf, 3), "contract_kva": contract_kva,
                       "contract_pct": round(contract_pct, 4)},
@@ -172,6 +209,16 @@ class LiveEngine:
             "speed": self.ticks_per_sec,
             "data_label": DATA_LABEL,
         }
+
+    def inject(self, plant, message, severity):
+        """Queue a fake alert that every connected client (web + phone) receives immediately."""
+        self.inject_seq += 1
+        n = self.inject_seq
+        alert = {"asset_id": f"DEMO-{n}", "severity": severity, "kind": "demo", "source": "demo", "demo": True,
+                 "key": f"demo:{n}", "message": message or "DEMO: contract demand breached, 432 kVA vs 400 kVA contract"}
+        self.injected.append((n, alert))
+        self.injected = self.injected[-20:]
+        return n
 
     async def run(self):
         while True:
@@ -223,10 +270,18 @@ async def stream(plant: str = plant_cfg.ALL):
 
     async def gen():
         last = None
+        seen = e.inject_seq   # only demo alerts raised after this client connected
         while True:
+            fresh = [a for n, a in e.injected if n > seen]
+            if fresh:
+                seen = e.inject_seq
+                f = e.frame(e.idx, plant)
+                f["alerts"] = fresh
+                f["demo"] = True
+                yield f"data: {json.dumps(f)}\n\n"
             if e.idx != last:
-                last = e.idx
-                yield f"data: {json.dumps(e.frame(last, plant))}\n\n"
+                prev, last = last, e.idx
+                yield f"data: {json.dumps(e.frame(last, plant, event_from=prev))}\n\n"
             else:
                 yield ": keepalive\n\n"
             await asyncio.sleep(min(0.25, 0.5 / e.ticks_per_sec))
@@ -263,3 +318,16 @@ def fault_windows(plant: str = plant_cfg.ALL):
     plant = _plant(e, plant)
     ids = e.series[plant]["asset_ids"]
     return [w for w in e.fault_windows if w["asset_id"] in ids]
+
+
+class SimAlert(BaseModel):
+    message: str | None = None
+    severity: Literal["low", "medium", "high", "critical"] = "critical"
+
+
+@router.post("/simulate-alert")
+def simulate_alert(a: SimAlert):
+    """Demo helper: raise a critical alert right now on every connected dashboard and phone."""
+    e = _engine()
+    n = e.inject(None, a.message, a.severity)
+    return {"sent": n}
