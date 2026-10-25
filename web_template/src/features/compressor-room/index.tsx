@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import { usePlant } from '@/context/plant-context'
 import { useAnomalies, useAssetSeries } from '@/hooks/use-kpcl'
 import { fmtKw, fmtSpecificPower } from '@/lib/format'
+import { explainLeakFlow, explainPressure } from '@/lib/chart-explanations'
+import { ChartExplainer } from '@/components/kpcl/chart-explainer'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -113,7 +115,9 @@ export function CompressorRoom() {
           </CardHeader>
           <CardContent>
             {isLoading ? <Skeleton className='h-48 w-full' /> : (
-              <PressureSawtoothChart data={series} lowerBar={asset.lower} upperBar={asset.upper} />
+              <ChartExplainer explain={() => explainPressure(series as never[], asset.id, asset.lower, asset.upper)}>
+                <PressureSawtoothChart data={series} lowerBar={asset.lower} upperBar={asset.upper} />
+              </ChartExplainer>
             )}
           </CardContent>
         </Card>
@@ -125,6 +129,7 @@ export function CompressorRoom() {
           <CardContent>
             {isLoading ? <Skeleton className='h-48 w-full' /> : (
               <TrendChart
+                explain={() => explainLeakFlow(series as never[], assetId)}
                 data={series as never[]}
                 xKey='ts'
                 yUnit=' m³/min'

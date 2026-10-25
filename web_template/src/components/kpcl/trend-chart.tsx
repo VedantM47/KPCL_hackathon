@@ -9,6 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { ChartExplainer, type ExplainSource } from '@/components/kpcl/chart-explainer'
 
 // compact axis numbers (1.5k, 12k) so wide rupee/kWh series don't overflow the axis gutter
 function fmtAxis(v: number) {
@@ -42,77 +43,81 @@ type TrendChartProps = {
   xTickFormatter?: (v: string) => string
   yUnit?: string
   yMin?: number
+  /** What the chart shows and what its data implies — opened by clicking the chart. */
+  explain: ExplainSource
 }
 
 // Shared trend chart for 15-min/hourly/daily series — tabular tooltips, one
 // brand color for the primary series, neutral grey for comparisons, amber/red
 // reserved for threshold or fault series only.
-export function TrendChart({ data, xKey, series, height = 220, variant = 'area', xTickFormatter, yUnit, yMin }: TrendChartProps) {
+export function TrendChart({ data, xKey, series, height = 220, variant = 'area', xTickFormatter, yUnit, yMin, explain }: TrendChartProps) {
   const Chart = variant === 'area' ? AreaChart : LineChart
   return (
-    <ResponsiveContainer width='100%' height={height}>
-      <Chart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray='3 3' stroke='var(--border)' vertical={false} />
-        <XAxis
-          dataKey={xKey}
-          tickFormatter={xTickFormatter}
-          tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-          tickLine={false}
-          axisLine={{ stroke: 'var(--border)' }}
-          minTickGap={24}
-        />
-        <YAxis
-          tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-          tickLine={false}
-          axisLine={false}
-          width={yUnit ? 68 : 52}
-          unit={yUnit}
-          domain={yMin !== undefined ? [yMin, 'auto'] : undefined}
-          allowDataOverflow={yMin !== undefined}
-          tickFormatter={fmtAxis}
-        />
-        <Tooltip
-          contentStyle={{
-            backgroundColor: 'var(--popover)',
-            border: '1px solid var(--border)',
-            borderRadius: 6,
-            fontSize: 12,
-          }}
-          labelStyle={{ color: 'var(--muted-foreground)', marginBottom: 2 }}
-          formatter={(value, name) => [typeof value === 'number' ? value.toFixed(2) : String(value ?? '—'), String(name)]}
-        />
-        {series.map((s) => {
-          const color = COLOR_VAR[s.color ?? 'brand']
-          if (variant === 'line') {
+    <ChartExplainer explain={explain}>
+      <ResponsiveContainer width='100%' height={height}>
+        <Chart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray='3 3' stroke='var(--border)' vertical={false} />
+          <XAxis
+            dataKey={xKey}
+            tickFormatter={xTickFormatter}
+            tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+            tickLine={false}
+            axisLine={{ stroke: 'var(--border)' }}
+            minTickGap={24}
+          />
+          <YAxis
+            tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+            tickLine={false}
+            axisLine={false}
+            width={yUnit ? 68 : 52}
+            unit={yUnit}
+            domain={yMin !== undefined ? [yMin, 'auto'] : undefined}
+            allowDataOverflow={yMin !== undefined}
+            tickFormatter={fmtAxis}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: 'var(--popover)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              fontSize: 12,
+            }}
+            labelStyle={{ color: 'var(--muted-foreground)', marginBottom: 2 }}
+            formatter={(value, name) => [typeof value === 'number' ? value.toFixed(2) : String(value ?? '—'), String(name)]}
+          />
+          {series.map((s) => {
+            const color = COLOR_VAR[s.color ?? 'brand']
+            if (variant === 'line') {
+              return (
+                <Line
+                  key={s.key}
+                  type='monotone'
+                  dataKey={s.key}
+                  name={s.label}
+                  stroke={color}
+                  strokeWidth={1.75}
+                  strokeDasharray={s.dashed ? '4 3' : undefined}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              )
+            }
             return (
-              <Line
+              <Area
                 key={s.key}
                 type='monotone'
                 dataKey={s.key}
                 name={s.label}
                 stroke={color}
                 strokeWidth={1.75}
-                strokeDasharray={s.dashed ? '4 3' : undefined}
-                dot={false}
+                fill={color}
+                fillOpacity={0.12}
                 isAnimationActive={false}
               />
             )
-          }
-          return (
-            <Area
-              key={s.key}
-              type='monotone'
-              dataKey={s.key}
-              name={s.label}
-              stroke={color}
-              strokeWidth={1.75}
-              fill={color}
-              fillOpacity={0.12}
-              isAnimationActive={false}
-            />
-          )
-        })}
-      </Chart>
-    </ResponsiveContainer>
+          })}
+        </Chart>
+      </ResponsiveContainer>
+    </ChartExplainer>
   )
 }

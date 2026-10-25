@@ -4,7 +4,9 @@ import { useAssetSeries, useForecastDemand, useKpis, usePlantsCompare } from '@/
 import { kpclApi } from '@/lib/kpcl-api'
 import { fmtKwh, fmtPct, fmtRupees, fmtTco2 } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { explainPlantComparison, explainSolarGeneration } from '@/lib/chart-explanations'
 import { Button } from '@/components/ui/button'
+import { ChartExplainer } from '@/components/kpcl/chart-explainer'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { KpiCard } from '@/components/kpcl/kpi-card'
@@ -83,7 +85,7 @@ export function PlantOverview() {
       </div>
 
       <div className='mt-4 grid gap-3 lg:grid-cols-5'>
-        <Card className='lg:col-span-3'>
+        <Card className='min-w-0 lg:col-span-3'>
           <CardHeader className='pb-2'>
             <CardTitle className='text-sm font-medium'>Plant comparison — click a row to switch plant</CardTitle>
           </CardHeader>
@@ -91,61 +93,64 @@ export function PlantOverview() {
             {plantsLoading || !plants ? (
               <Skeleton className='mx-4 h-40 w-full' />
             ) : (
-              <div className='overflow-x-auto'>
-                <table className='w-full text-sm'>
-                  <thead>
-                    <tr className='border-b text-left text-[11px] text-muted-foreground uppercase'>
-                      <th className='px-4 py-2'>Plant</th>
-                      <th className='px-2 py-2'>Energy</th>
-                      <th className='px-2 py-2 text-right'>Cost</th>
-                      <th className='px-2 py-2 text-right'>tCO₂e</th>
-                      <th className='px-2 py-2 text-right'>Peak / contract</th>
-                      <th className='px-4 py-2 text-right'>Grid kWh/unit</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {plants.map((p) => {
-                      const ratio = p.peak_kva / p.contract_kva
-                      return (
-                        <tr
-                          key={p.plant_id}
-                          onClick={() => setPlant(p.plant_id)}
-                          className={cn(
-                            'cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/50',
-                            plant === p.plant_id && 'bg-muted/60'
-                          )}
-                        >
-                          <td className='px-4 py-2'>
-                            <p className='font-medium'>{p.plant_name}</p>
-                            <p className='text-[11px] text-muted-foreground'>{p.division}</p>
-                          </td>
-                          <td className='w-40 px-2 py-2'>
-                            <p className='font-mono text-xs tabular-nums'>{fmtKwh(p.kwh_total)}</p>
-                            <div className='mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted'>
-                              <div className='h-full rounded-full bg-chart-1' style={{ width: `${(p.kwh_total / maxKwh) * 100}%` }} />
-                            </div>
-                          </td>
-                          <td className='px-2 py-2 text-right font-mono text-xs whitespace-nowrap tabular-nums'>{fmtRupees(p.cost_rs)}</td>
-                          <td className='px-2 py-2 text-right font-mono text-xs tabular-nums'>
-                            {(p.scope1_tco2 + p.scope2_tco2).toFixed(0)}
-                          </td>
-                          <td
+              <ChartExplainer explain={() => explainPlantComparison(plants)}>
+                <div className='overflow-x-auto'>
+                  <table className='w-full text-sm'>
+                    <thead>
+                      <tr className='border-b text-left text-[11px] text-muted-foreground uppercase'>
+                        <th className='px-4 py-2'>Plant</th>
+                        <th className='px-2 py-2'>Energy</th>
+                        <th className='px-2 py-2 text-right'>Cost</th>
+                        <th className='px-2 py-2 text-right'>tCO₂e</th>
+                        <th className='px-2 py-2 text-right'>Peak / contract</th>
+                        <th className='px-4 py-2 text-right'>Grid kWh/unit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {plants.map((p) => {
+                        const ratio = p.peak_kva / p.contract_kva
+                        return (
+                          <tr
+                            key={p.plant_id}
+                            data-no-explain
+                            onClick={() => setPlant(p.plant_id)}
                             className={cn(
-                              'px-2 py-2 text-right font-mono text-xs tabular-nums',
-                              ratio > 1 && 'text-destructive'
+                              'cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/50',
+                              plant === p.plant_id && 'bg-muted/60'
                             )}
                           >
-                            {p.peak_kva.toFixed(0)} / {p.contract_kva.toFixed(0)}
-                          </td>
-                          <td className='px-4 py-2 text-right font-mono text-xs tabular-nums'>
-                            {p.kwh_per_unit ? p.kwh_per_unit.toFixed(0) : '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            <td className='px-4 py-2'>
+                              <p className='font-medium'>{p.plant_name}</p>
+                              <p className='text-[11px] text-muted-foreground'>{p.division}</p>
+                            </td>
+                            <td className='w-40 px-2 py-2'>
+                              <p className='font-mono text-xs tabular-nums'>{fmtKwh(p.kwh_total)}</p>
+                              <div className='mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted'>
+                                <div className='h-full rounded-full bg-chart-1' style={{ width: `${(p.kwh_total / maxKwh) * 100}%` }} />
+                              </div>
+                            </td>
+                            <td className='px-2 py-2 text-right font-mono text-xs whitespace-nowrap tabular-nums'>{fmtRupees(p.cost_rs)}</td>
+                            <td className='px-2 py-2 text-right font-mono text-xs tabular-nums'>
+                              {(p.scope1_tco2 + p.scope2_tco2).toFixed(0)}
+                            </td>
+                            <td
+                              className={cn(
+                                'px-2 py-2 text-right font-mono text-xs tabular-nums',
+                                ratio > 1 && 'text-destructive'
+                              )}
+                            >
+                              {p.peak_kva.toFixed(0)} / {p.contract_kva.toFixed(0)}
+                            </td>
+                            <td className='px-4 py-2 text-right font-mono text-xs tabular-nums'>
+                              {p.kwh_per_unit ? p.kwh_per_unit.toFixed(0) : '—'}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </ChartExplainer>
             )}
           </CardContent>
         </Card>
@@ -163,6 +168,7 @@ export function PlantOverview() {
               <Skeleton className='h-48 w-full' />
             ) : (
               <TrendChart
+                explain={() => explainSolarGeneration((solarSeries ?? []) as never[])}
                 data={solarSeries as never[]}
                 xKey='ts'
                 yUnit=' kW'

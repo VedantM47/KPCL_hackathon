@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils'
 import { fmtRupees, fmtTco2 } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ChartExplainer } from '@/components/kpcl/chart-explainer'
+import { explainScenarioCompare } from '@/lib/chart-explanations'
 import { Skeleton } from '@/components/ui/skeleton'
 import { FaultTimeline } from '@/components/kpcl/fault-timeline'
 import { KpiCard } from '@/components/kpcl/kpi-card'
@@ -88,20 +90,22 @@ export function ActionCenter() {
           {compareLoading || !active ? (
             <Skeleton className='h-16 w-full' />
           ) : (
-            <div className='grid grid-cols-3 gap-4 font-mono text-sm tabular-nums'>
-              <div>
-                <p className='text-[11px] text-muted-foreground uppercase'>Energy</p>
-                <p className='text-lg font-semibold'>{(active.kWh / 1000).toFixed(1)} MWh</p>
+            <ChartExplainer explain={() => explainScenarioCompare(compare!, scenario)}>
+              <div className='grid grid-cols-3 gap-4 font-mono text-sm tabular-nums'>
+                <div>
+                  <p className='text-[11px] text-muted-foreground uppercase'>Energy</p>
+                  <p className='text-lg font-semibold'>{(active.kWh / 1000).toFixed(1)} MWh</p>
+                </div>
+                <div>
+                  <p className='text-[11px] text-muted-foreground uppercase'>Cost</p>
+                  <p className='text-lg font-semibold'>{fmtRupees(active.cost_rs)}</p>
+                </div>
+                <div>
+                  <p className='text-[11px] text-muted-foreground uppercase'>Emissions</p>
+                  <p className='text-lg font-semibold'>{fmtTco2(active.tco2)}</p>
+                </div>
               </div>
-              <div>
-                <p className='text-[11px] text-muted-foreground uppercase'>Cost</p>
-                <p className='text-lg font-semibold'>{fmtRupees(active.cost_rs)}</p>
-              </div>
-              <div>
-                <p className='text-[11px] text-muted-foreground uppercase'>Emissions</p>
-                <p className='text-lg font-semibold'>{fmtTco2(active.tco2)}</p>
-              </div>
-            </div>
+            </ChartExplainer>
           )}
         </CardContent>
       </Card>

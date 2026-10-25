@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { usePlant } from '@/context/plant-context'
 import { useAssetSeries, useProductionDaily } from '@/hooks/use-kpcl'
 import { fmtKwh } from '@/lib/format'
+import { explainFurnaceFuel, explainPaintAir, explainShifts, explainUnitsVsEnergy } from '@/lib/chart-explanations'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { KpiCard } from '@/components/kpcl/kpi-card'
@@ -75,7 +76,7 @@ export function Production() {
           </CardHeader>
           <CardContent>
             {isLoading ? <Skeleton className='h-52 w-full' /> : (
-              <TrendChart data={monthly} xKey='month' variant='line' series={[
+              <TrendChart explain={() => explainShifts(monthly as never[])} data={monthly} xKey='month' variant='line' series={[
                 { key: 'A', label: 'Shift A', color: 'brand' },
                 { key: 'B', label: 'Shift B', color: 'neutral' },
               ]} />
@@ -89,7 +90,7 @@ export function Production() {
           </CardHeader>
           <CardContent>
             {isLoading ? <Skeleton className='h-52 w-full' /> : (
-              <TrendChart data={monthly} xKey='month' variant='line' series={[
+              <TrendChart explain={() => explainUnitsVsEnergy(monthly as never[])} data={monthly} xKey='month' variant='line' series={[
                 { key: 'units', label: 'Units', color: 'brand' },
               ]} />
             )}
@@ -107,6 +108,7 @@ export function Production() {
           <CardContent>
             {furnaceLoading ? <Skeleton className='h-40 w-full' /> : (
               <TrendChart
+                explain={() => explainFurnaceFuel((furnace ?? []) as never[])}
                 data={furnace as never[]}
                 xKey='ts'
                 height={160}
@@ -128,6 +130,7 @@ export function Production() {
           <CardContent>
             {paintLoading ? <Skeleton className='h-40 w-full' /> : (
               <TrendChart
+                explain={() => explainPaintAir((paint ?? []) as never[])}
                 data={paint as never[]}
                 xKey='ts'
                 height={160}
