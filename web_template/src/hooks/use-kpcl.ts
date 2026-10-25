@@ -38,6 +38,13 @@ export function useLiveStream() {
     es.onerror = () => setConnected(false)
     es.onmessage = (ev) => {
       const frame = JSON.parse(ev.data) as LiveFrame
+      if (frame.demo) {
+        // simulated alert: show it in the ticker without disturbing the rolling chart buffer
+        setAlerts((prev) =>
+          [...frame.alerts.map((a, i) => ({ ...a, ts: frame.ts, key: `demo-${Date.now()}-${i}` })), ...prev].slice(0, ALERT_BUFFER)
+        )
+        return
+      }
       // a jump (or year wrap) breaks continuity — restart the rolling window
       const continuous = lastIdx.current !== null && frame.idx > lastIdx.current && frame.idx - lastIdx.current <= 4
       lastIdx.current = frame.idx
@@ -126,6 +133,8 @@ export function useForecastDemand() {
   return useQuery({
     queryKey: ['forecast-demand', plant],
     queryFn: () => kpclApi.forecastDemand(plant),
+    // "tomorrow" follows the live replay's simulated day
+    refetchInterval: 30_000,
   })
 }
 

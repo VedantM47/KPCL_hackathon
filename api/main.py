@@ -12,6 +12,8 @@ fact_plant_meter, an allocation of the main meter (see generator/plants.py).
 Run: uvicorn api.main:app --reload --port 8000
 """
 import io
+import os
+import pickle
 import sqlite3
 from contextlib import asynccontextmanager
 
@@ -21,6 +23,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from api import devconsole
 from api import live as live_mod
 from ml import anomaly as anomaly_mod
 from ml import forecast as forecast_mod
@@ -44,6 +47,38 @@ def load_config():
         return yaml.safe_load(f)
 
 
+CACHE_DIR = ".cache"
+CACHE_FILE = os.path.join(CACHE_DIR, "startup_models.pkl")
+
+
+def _cache_fingerprint(plants):
+    """Anything that changes the trained models: the data, the config and the model code."""
+    files = [BASELINE_DB, "config.yaml", "ml/anomaly.py", "ml/forecast.py", "ml/plant_cfg.py"]
+    parts = [(f, os.path.getsize(f), int(os.path.getmtime(f))) for f in files if os.path.exists(f)]
+    return repr((parts, plants))
+
+
+def _load_model_cache(plants):
+    try:
+        with open(CACHE_FILE, "rb") as f:
+            blob = pickle.load(f)
+        if blob.get("fingerprint") == _cache_fingerprint(plants):
+            return blob["anomalies"], blob["forecast"]
+    except Exception:
+        pass   # missing, stale or unreadable cache: retrain
+    return None
+
+
+def _save_model_cache(plants):
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(CACHE_FILE, "wb") as f:
+            pickle.dump({"fingerprint": _cache_fingerprint(plants), "anomalies": CACHE["anomalies"],
+                         "forecast": CACHE["forecast"]}, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as e:
+        print(f"[startup] could not write model cache: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config = load_config()
@@ -51,14 +86,20 @@ async def lifespan(app: FastAPI):
     plants = [plant_cfg.ALL] + plant_cfg.plant_ids(config)
 
     conn = get_conn()
-    print("[startup] running anomaly detection (cached for the process lifetime) ...")
-    flagged = {}
-    for asset_id, (table, cols, rule_fn) in anomaly_mod.ASSET_SPECS.items():
-        flagged[asset_id] = anomaly_mod.run_asset(conn, asset_id, table, cols, rule_fn)
-    CACHE["anomalies"] = pd.concat(flagged.values(), ignore_index=True)
+    cached = _load_model_cache(plants)
+    if cached:
+        print("[startup] loaded anomaly + forecast models from .cache (delete .cache to retrain)")
+        CACHE["anomalies"], CACHE["forecast"] = cached
+    else:
+        print("[startup] running anomaly detection (first run, ~1 min; cached to disk afterwards) ...")
+        flagged = {}
+        for asset_id, (table, cols, rule_fn) in anomaly_mod.ASSET_SPECS.items():
+            flagged[asset_id] = anomaly_mod.run_asset(conn, asset_id, table, cols, rule_fn)
+        CACHE["anomalies"] = pd.concat(flagged.values(), ignore_index=True)
 
-    print("[startup] training day-ahead forecast models (company + each plant) ...")
-    CACHE["forecast"] = {p: forecast_mod.run_forecast(config, conn, p) for p in plants}
+        print("[startup] walk-forward day-ahead forecasts (company + each plant, ~30 s) ...")
+        CACHE["forecast"] = {p: forecast_mod.run_forecast(config, conn, p) for p in plants}
+        _save_model_cache(plants)
 
     try:
         CACHE["recommendations"] = pd.read_csv("recommendations.csv")
@@ -67,7 +108,7 @@ async def lifespan(app: FastAPI):
         print("[startup] recommendations.csv not found — run `python -m ml.recommendations` first. /recommendations will 503 until then.")
 
     print("[startup] building peak-shaving planners and loss costing ...")
-    CACHE["planner"] = {p: PeakPlanner(conn, config, CACHE["forecast"][p]["test"], p) for p in plants}
+    CACHE["planner"] = {p: PeakPlanner(conn, config, CACHE["forecast"][p], p) for p in plants}
     CACHE["leaks_daily"], CACHE["leaks_by_asset"] = losses_mod.leak_summary(conn, config)
     CACHE["anomaly_excess"] = losses_mod.anomaly_excess(conn, config, CACHE["anomalies"])
 
@@ -89,6 +130,7 @@ app.add_middleware(
 )
 
 app.include_router(live_mod.router)
+app.include_router(devconsole.router)
 
 
 def _records(df):
@@ -216,7 +258,7 @@ def production_daily(plant: str | None = None):
     else:
         prod = pd.read_sql("SELECT date, shift, family, units, is_surge FROM fact_production WHERE plant_id = ?",
                            conn, params=(p,))
-        mm = pd.read_sql("SELECT ts, kW FROM fact_plant_meter WHERE plant_id = ?", conn, params=(p,))
+        mm = pd.read_sql("SELECT ts, kW, kVA FROM fact_plant_meter WHERE plant_id = ?", conn, params=(p,))
     conn.close()
 
     mm["date"] = pd.to_datetime(mm["ts"]).dt.strftime("%Y-%m-%d")
@@ -309,25 +351,81 @@ def asset_series(asset_id: str, from_: str | None = Query(None, alias="from"), t
     return _records(out)
 
 
+def _replay_tomorrow():
+    """The day after the live replay's current simulated day (what a planner would be looking at)."""
+    e = live_mod.ENGINE.get("e")
+    if e is None:
+        return None
+    return (e.ts.iloc[e.idx].normalize() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 @app.get("/forecast/demand")
-def forecast_demand(plant: str | None = None):
+def forecast_demand(plant: str | None = None, date: str | None = None):
+    """Day-ahead forecast for one day (default: the replay's tomorrow) with a P10-P90 band, the
+    day's peak/breach-risk forecast, and walk-forward evaluation metrics."""
     p = _plant(plant)
     cached = CACHE.get("forecast", {}).get(p or plant_cfg.ALL)
     if cached is None:
         raise HTTPException(503, "forecast model not ready")
-    test = cached["test"].tail(forecast_mod.HORIZON_STEPS).copy()
-    test["ts"] = test["ts"].astype(str)
+    iv, days = cached["intervals"], cached["days"]
+    if date is None:
+        date = _replay_tomorrow() or iv["ts"].max().strftime("%Y-%m-%d")
+    try:
+        day = pd.Timestamp(date).normalize()
+    except ValueError:
+        raise HTTPException(400, f"unparseable date: {date}")
+    if day.year != 2025:   # the replay wraps around a single simulated year
+        day = day.replace(year=2025)
+    rows = iv[iv["date"] == day].copy()
+    covered = len(rows) > 0
+    if not covered:
+        # before the first forecast origin (Jan-Feb): show what was metered, say there is no forecast
+        rows = _plant_day_actuals(p, day)
+    rows["ts"] = rows["ts"].astype(str)
+    cols = ["ts", "kW", "kVA", "pred_kw", "p10_kw", "p90_kw", "pred_kva", "p10_kva", "p90_kva", "breach_flag"]
+    for c in cols:
+        if c not in rows:
+            rows[c] = None
+    d = days.loc[day] if day in days.index else None
+    m = cached["metrics"]
     return {
         "plant_id": p or plant_cfg.ALL,
+        "date": day.strftime("%Y-%m-%d"),
+        "covered": covered,
+        "first_forecast_date": cached["first_forecast_date"],
+        "method": "walk-forward day-ahead (retrained monthly on past data only); "
+                  "mean + conformal P10-P90 band; separate daily-peak quantile model",
+        "day": None if d is None else {
+            "peak_p10_kva": round(float(d["peak_p10_kva"]), 1), "peak_p50_kva": round(float(d["peak_p50_kva"]), 1),
+            "peak_p90_kva": round(float(d["peak_p90_kva"]), 1), "breach_risk": round(float(d["breach_risk"]), 3),
+            "near_contract_risk": round(float(d["near_risk"]), 3),
+            "actual_peak_kva": None if pd.isna(d["peak_kva"]) else round(float(d["peak_kva"]), 1),
+        },
         "metrics": {
+            # older fields, kept for existing clients
             "mape_pct": round(cached["mape"], 2),
             "wape_pct": round(cached["wape"], 2),
             "naive_climatology_wape_pct": round(cached["naive_wape"], 2),
             "contract_kva": cached["contract_kva"],
             "n_breaches_in_test_period": cached["n_breaches"],
         },
-        "last_24h": _records(test[["ts", "kW", "pred_kw", "pred_kva", "breach_flag"]]),
+        "evaluation": m,
+        "last_24h": _records(rows[cols]),
     }
+
+
+def _plant_day_actuals(p, day):
+    conn = get_conn()
+    try:
+        lo, hi = day.strftime("%Y-%m-%d"), (day + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        if p is None:
+            df = pd.read_sql("SELECT ts, kW, kVA FROM fact_main_meter WHERE ts >= ? AND ts < ? ORDER BY ts", conn, params=(lo, hi))
+        else:
+            df = pd.read_sql("SELECT ts, kW, kVA FROM fact_plant_meter WHERE plant_id = ? AND ts >= ? AND ts < ? ORDER BY ts",
+                             conn, params=(p, lo, hi))
+        return df
+    finally:
+        conn.close()
 
 
 def _anomaly_frame(plant, asset_id=None):
@@ -335,6 +433,8 @@ def _anomaly_frame(plant, asset_id=None):
     if df is None:
         raise HTTPException(503, "anomaly cache not ready")
     out = df[df["final_flag"]].copy()
+    # ranked over the whole flagged set, so a plant/asset filter does not change a row's severity
+    out["severity"] = live_mod.score_severity(out)
     if plant is not None:
         out = out[out["asset_id"].isin(plant_cfg.assets_of(CACHE["config"], plant))]
     if asset_id:
@@ -355,8 +455,6 @@ def anomalies(from_: str | None = Query(None, alias="from"), to: str | None = No
         out = out[out["ts"] < to_bound]
     out = out.sort_values("anomaly_score", ascending=False)
     out["ts"] = out["ts"].astype(str)
-    out["severity"] = pd.cut(out["anomaly_score"], bins=[-float("inf"), 0, 0.1, 0.2, float("inf")],
-                              labels=["low", "medium", "high", "critical"]).astype(str)
     return _records(out[["ts", "asset_id", "anomaly_score", "severity", "model_flag", "rule_flag"]])
 
 
@@ -367,17 +465,20 @@ def anomalies_daily(plant: str | None = None):
     widget that only needs one value per (asset, day)."""
     out = _anomaly_frame(_plant(plant))
     out["date"] = out["ts"].dt.strftime("%Y-%m-%d")
-    out["rank"] = pd.cut(out["anomaly_score"], bins=[-float("inf"), 0, 0.1, 0.2, float("inf")], labels=[1, 2, 3, 4]).astype(int)
+    out["rank"] = out["severity"].map({"low": 1, "medium": 2, "high": 3, "critical": 4}).astype(int)
     daily = out.groupby(["asset_id", "date"])["rank"].max().reset_index()
     return _records(daily)
 
 
 @app.get("/schedule/days")
-def schedule_days(top_n: int = 40, plant: str | None = None):
-    """Highest-peak days (forecast where the model covers them, else actuals),
-    to pick a day for the peak-shaving plan."""
+def schedule_days(top_n: int = 40, plant: str | None = None, rank_by: str = "actual"):
+    """Days to pick for the peak-shaving plan, ranked by metered peak (default — the phone's
+    "Jump to peak day" relies on this being a day that really breached) or by forecast breach
+    risk (rank_by=risk). Each row carries both the metered peak and the day-ahead forecast."""
     p = _plant(plant)
-    return CACHE["planner"][p or plant_cfg.ALL].risk_days(max(1, min(top_n, 366)))
+    if rank_by not in ("actual", "risk"):
+        raise HTTPException(400, "rank_by must be actual or risk")
+    return CACHE["planner"][p or plant_cfg.ALL].risk_days(max(1, min(top_n, 366)), rank_by=rank_by)
 
 
 @app.get("/schedule/plan")
@@ -505,7 +606,7 @@ def _carbon_monthly(conn, plant=None):
         fuel_events = pd.read_sql("SELECT ts, asset_id, fuel_type, amount_kg FROM fact_fuel_event", conn)
         ids = plant_cfg.assets_of(CACHE["config"], plant)
         # outage diesel is booked on the main meter; share it by the plant's load that month
-        share = pd.read_sql("SELECT ts, kW FROM fact_plant_meter WHERE plant_id = ?", conn, params=(plant,))
+        share = pd.read_sql("SELECT ts, kW, kVA FROM fact_plant_meter WHERE plant_id = ?", conn, params=(plant,))
         total = pd.read_sql("SELECT ts, kW FROM fact_main_meter", conn)
         m = pd.to_datetime(share["ts"]).dt.strftime("%Y-%m")
         mt = pd.to_datetime(total["ts"]).dt.strftime("%Y-%m")

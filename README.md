@@ -73,7 +73,7 @@ internal resolution, aggregated to 15 minutes).
 
 ```bash
 python ml/anomaly.py            # prints recall/precision/FPR vs fact_fault_label
-python ml/forecast.py           # prints MAPE/WAPE for the day-ahead forecaster
+python -m ml.forecast          # walk-forward evaluation per plant vs last-week/climatology baselines
 python -m ml.recommendations    # writes recommendations.csv (~8 counterfactual sims, a few minutes)
 ```
 
@@ -122,7 +122,8 @@ before writing new queries against either `.db` file.
 | `GET /assets/{id}/series?from=&to=&res=15m\|1h\|1d` | any asset's time series |
 | `GET /plants/compare` | per-plant annual kWh (the only column genuinely split by site) |
 | `GET /production/daily` | daily units, shift split, energy-per-unit |
-| `GET /forecast/demand` | day-ahead forecast metrics + last-24h predicted vs actual |
+| `GET /forecast/demand?plant=&date=` | day-ahead forecast for one day (default: the live replay's tomorrow): P10–P90 band, peak + breach risk, walk-forward metrics |
+| `GET /schedule/days?plant=&top_n=&rank_by=actual\|risk` | days by metered peak (default) or forecast breach risk, each with both |
 | `GET /anomalies?from=&to=&asset_id=` | flagged 15-min rows |
 | `GET /anomalies/daily` | day × asset worst-severity grid (powers the fault timeline) |
 | `GET /recommendations` | ranked actions with real kWh/₹/tCO2 impact |
@@ -237,11 +238,14 @@ this table is a convenience index, not a separate source of truth.
   noise typically looks like," not measured from real telemetry
 
 ### ML / forecast
-- Train/test split: first 9 months / final 3 months (so test includes the
-  monsoon tail of the training window, not a monsoon-only test set — see the
-  caveat in `ml/forecast.py`'s own comments)
-- LightGBM hyperparameters (300 estimators, depth 7, 0.05 learning rate) —
-  not tuned, just reasonable defaults
+- Walk-forward evaluation: retrained on the 1st of each month from March on all
+  earlier data, forecasting each day 24 h ahead; Jan–Feb have no forecast (too
+  little history) and are labelled so rather than back-filled with actuals
+- Actual weather stands in for a weather forecast (`weather_noise_c` in
+  `run_forecast` simulates forecast error; default 0)
+- LightGBM hyperparameters (120 trees, 31 leaves, 0.06 learning rate for
+  intervals; 7 leaves for the daily-peak model) — reasonable defaults, not tuned
+- "Warned" = forecast probability of the condition ≥ 30%
 - IsolationForest contamination rate: 8% per asset — picked to roughly match
   known fault-window coverage, not derived from a labeled validation set
 
@@ -260,13 +264,20 @@ this table is a convenience index, not a separate source of truth.
   currently reads ~43%. Traced to the compressed-air system's background
   leak running around the clock; not silently passed, flagged in the
   validator's own output
-- The day-ahead forecaster's ~68% WAPE is mostly irreducible: the generator
-  randomizes each day's exact CNC cutting minutes and paint-booth batch
-  timing independently per day, which no calendar/weather feature can predict
-  24h ahead. Confirmed by comparing against a naive climatology baseline
-  (72% WAPE) — the model beats it by a small, real margin, not nothing
-- No browser-based visual QA was done on the dashboard — verified via
-  TypeScript compilation, a full production build, and direct API testing
+- The exact 15-minute load shape is largely unpredictable a day ahead: the
+  generator randomises each day's CNC cutting minutes and paint-booth batch
+  timing, so interval WAPE stays high (company ~65%, Hadapsar ~90%). The
+  forecaster therefore predicts the daily peak with its own quantile model:
+  peak bias is ~0 (the old single-split model was ~80 kVA low) and Hadapsar's
+  near-contract days are warned 131/139 vs 80 for "same as last week".
+  Actual contract breaches are rare spikes and remain hard (company 1/3,
+  Hadapsar 1/6; Saswad 38/44)
+- Nashik's per-plant energy is an allocation of the company's net-of-solar grid
+  import (`generator/plants.py`), which swings far more day to day (CV 0.62)
+  than Nashik's own metered load (CV 0.18). Its daily-energy forecast error
+  (~43%) reflects that allocation, not the plant
+- Browser QA is partial: the plant overview forecast card is checked headless (Playwright) per plant;
+  other pages were verified via TypeScript compilation, a production build and API tests
   only. Worth a manual look before treating the UI as final
 
 ---

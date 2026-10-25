@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Activity, Pause, Play, Sun, Zap } from 'lucide-react'
+import { Activity, BellRing, Pause, Play, Sun, Zap } from 'lucide-react'
 import { kpclApi } from '@/lib/kpcl-api'
 import { usePlant } from '@/context/plant-context'
 import { useFaultWindows, useLiveStream } from '@/hooks/use-kpcl'
@@ -69,6 +69,15 @@ export function LiveMonitor() {
               {s}×
             </Button>
           ))}
+          <Button
+            size='sm'
+            variant='destructive'
+            className='h-8 gap-1 text-xs'
+            onClick={() => kpclApi.simulateAlert()}
+            title='Sends a critical alert to this dashboard and any connected phone'
+          >
+            <BellRing className='size-3.5' /> Simulate critical alert
+          </Button>
           <Select onValueChange={(v) => kpclApi.liveControl({ jump_to: v })}>
             <SelectTrigger size='sm' className='w-44 text-xs'>
               <SelectValue placeholder='Jump to fault…' />

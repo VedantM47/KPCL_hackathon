@@ -11,8 +11,8 @@ android {
         applicationId = "com.kpcl.plantalert"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 5
+        versionName = "2.0"
     }
 
     buildTypes {
@@ -29,4 +29,11 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+dependencies {
+    // JVM unit tests only (the app itself has no third-party libraries); org.json gives the tests the
+    // real JSON parser that android.jar only stubs
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

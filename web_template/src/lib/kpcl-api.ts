@@ -54,7 +54,45 @@ export type Asset = {
 
 export type SeriesPoint = Record<string, string | number | boolean | null>
 
+export type ForecastFlags = {
+  actual_days: number
+  flagged_days: number
+  caught: number
+  recall: number | null
+  precision: number | null
+}
+
+export type ForecastEvaluation = {
+  days: number
+  interval_wape_pct: number
+  interval_wape_climatology_pct: number
+  interval_wape_last_week_pct: number
+  daily_energy_error_pct: number
+  band_coverage_p10_p90: number
+  peak_mae_kva: number
+  peak_bias_kva: number
+  peak_mae_last_week_kva: number
+  peak_bias_last_week_kva: number
+  peak_band_coverage_p10_p90: number
+  near_contract: ForecastFlags & { last_week_baseline: ForecastFlags }
+  breach: ForecastFlags & { last_week_baseline: ForecastFlags }
+  warn_threshold: number
+}
+
 export type ForecastResponse = {
+  date?: string
+  covered?: boolean
+  first_forecast_date?: string
+  method?: string
+  day?: {
+    peak_p10_kva: number
+    peak_p50_kva: number
+    peak_p90_kva: number
+    breach_risk: number
+    near_contract_risk: number
+    actual_peak_kva: number | null
+  } | null
+  evaluation?: ForecastEvaluation
   metrics: {
     mape_pct: number
     wape_pct: number
@@ -64,10 +102,15 @@ export type ForecastResponse = {
   }
   last_24h: Array<{
     ts: string
-    kW: number
-    pred_kw: number
-    pred_kva: number
-    breach_flag: boolean
+    kW: number | null
+    kVA?: number | null
+    pred_kw: number | null
+    p10_kw?: number | null
+    p90_kw?: number | null
+    pred_kva: number | null
+    p10_kva?: number | null
+    p90_kva?: number | null
+    breach_flag: boolean | null
   }>
 }
 
@@ -156,6 +199,7 @@ export type LiveFrame = {
   chiller_kw_per_tr: number | null
   assets: Array<{ asset_id: string; kW: number | null; state: string | null }>
   alerts: LiveAlert[]
+  demo?: boolean
   paused: boolean
   speed: number
   data_label: string
@@ -282,6 +326,8 @@ export const kpclApi = {
   whatIfGrid: (plant?: string) => getJson<WhatIfGrid>('/whatif/grid', { plant: pl(plant) }),
 
   liveSnapshot: (plant?: string, n = 96) => getJson<LiveFrame[]>('/live/snapshot', { n: String(n), plant: pl(plant) }),
+
+  simulateAlert: () => postJson<{ sent: number }>('/live/simulate-alert', {}),
 
   liveFaultWindows: (plant?: string) => getJson<FaultWindow[]>('/live/fault-windows', { plant: pl(plant) }),
 
