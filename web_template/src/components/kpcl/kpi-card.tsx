@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react'
 import { Area, AreaChart, ResponsiveContainer } from 'recharts'
 import { cn } from '@/lib/utils'
+import { ChartExplainer, type ExplainSource } from '@/components/kpcl/chart-explainer'
 import { Card, CardContent } from '@/components/ui/card'
 
 type KpiCardProps = {
@@ -11,11 +12,13 @@ type KpiCardProps = {
   trendColor?: 'default' | 'warning' | 'destructive'
   delta?: { value: string; direction: 'up' | 'down' | 'flat'; good?: boolean }
   icon?: ReactNode
+  /** Explanation opened by clicking the sparkline. */
+  explain?: ExplainSource
 }
 
 // Dense, control-room-style KPI tile: tight padding, tabular numerals, a
 // small inline sparkline instead of a decorative illustration.
-export function KpiCard({ label, value, sub, trend, trendColor = 'default', delta, icon }: KpiCardProps) {
+export function KpiCard({ label, value, sub, trend, trendColor = 'default', delta, icon, explain }: KpiCardProps) {
   const sparkColor =
     trendColor === 'warning' ? 'var(--chart-3)' : trendColor === 'destructive' ? 'var(--chart-4)' : 'var(--chart-1)'
 
@@ -45,28 +48,34 @@ export function KpiCard({ label, value, sub, trend, trendColor = 'default', delt
         </div>
         {icon && <div className='text-muted-foreground mt-0.5 shrink-0'>{icon}</div>}
         {trend && trend.length > 1 && (
-          <div className='h-10 w-20 shrink-0'>
-            <ResponsiveContainer width='100%' height='100%'>
-              <AreaChart data={trend.map((y, i) => ({ x: i, y }))}>
-                <defs>
-                  <linearGradient id={`spark-${label.replace(/\s+/g, '')}`} x1='0' y1='0' x2='0' y2='1'>
-                    <stop offset='0%' stopColor={sparkColor} stopOpacity={0.35} />
-                    <stop offset='100%' stopColor={sparkColor} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <Area
-                  type='monotone'
-                  dataKey='y'
-                  stroke={sparkColor}
-                  strokeWidth={1.5}
-                  fill={`url(#spark-${label.replace(/\s+/g, '')})`}
-                  isAnimationActive={false}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          <SparkWrap explain={explain}>
+            <div className='h-10 w-20 shrink-0'>
+              <ResponsiveContainer width='100%' height='100%'>
+                <AreaChart data={trend.map((y, i) => ({ x: i, y }))}>
+                  <defs>
+                    <linearGradient id={`spark-${label.replace(/\s+/g, '')}`} x1='0' y1='0' x2='0' y2='1'>
+                      <stop offset='0%' stopColor={sparkColor} stopOpacity={0.35} />
+                      <stop offset='100%' stopColor={sparkColor} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <Area
+                    type='monotone'
+                    dataKey='y'
+                    stroke={sparkColor}
+                    strokeWidth={1.5}
+                    fill={`url(#spark-${label.replace(/\s+/g, '')})`}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </SparkWrap>
         )}
       </CardContent>
     </Card>
   )
+}
+
+function SparkWrap({ explain, children }: { explain?: ExplainSource; children: ReactNode }) {
+  return explain ? <ChartExplainer explain={explain} className='shrink-0'>{children}</ChartExplainer> : <>{children}</>
 }

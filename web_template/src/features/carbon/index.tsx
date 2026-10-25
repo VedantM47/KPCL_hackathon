@@ -3,6 +3,7 @@ import { usePlant } from '@/context/plant-context'
 import { useCarbonMonthly } from '@/hooks/use-kpcl'
 import { kpclApi } from '@/lib/kpcl-api'
 import { fmtTco2 } from '@/lib/format'
+import { explainCarbonMonthly, explainFuelMix, explainSolarAvoided } from '@/lib/chart-explanations'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -73,6 +74,7 @@ export function Carbon() {
           <CardContent>
             {isLoading ? <Skeleton className='h-52 w-full' /> : (
               <TrendChart
+                explain={() => explainCarbonMonthly(monthly as never[])}
                 data={monthly as never[]}
                 xKey='month'
                 yUnit=' tCO₂e'
@@ -92,6 +94,7 @@ export function Carbon() {
           <CardContent>
             {isLoading ? <Skeleton className='h-52 w-full' /> : (
               <TrendChart
+                explain={() => explainFuelMix(fuelByType as never[])}
                 data={fuelByType as never[]}
                 xKey='month'
                 series={[
@@ -112,6 +115,7 @@ export function Carbon() {
         <CardContent>
           {isLoading ? <Skeleton className='h-40 w-full' /> : (
             <TrendChart
+              explain={() => explainSolarAvoided(monthly as never[])}
               data={monthly as never[]}
               xKey='month'
               height={160}

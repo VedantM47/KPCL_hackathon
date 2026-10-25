@@ -214,3 +214,30 @@ export function useWhatIfGrid() {
     retry: false,
   })
 }
+
+/** Asset master, latest live frame and labelled fault windows for one plant — independent of the
+ * dashboard's plant switcher, so the facility view can show any plant. Polls the replay. */
+export function useFacilityState(plant: string) {
+  const assets = useQuery({
+    queryKey: ['assets', plant],
+    queryFn: () => kpclApi.assets(plant),
+    staleTime: Infinity,
+  })
+  const faults = useQuery({
+    queryKey: ['live-fault-windows', plant],
+    queryFn: () => kpclApi.liveFaultWindows(plant),
+    staleTime: Infinity,
+  })
+  const frame = useQuery({
+    queryKey: ['live-latest', plant],
+    queryFn: () => kpclApi.liveSnapshot(plant, 1).then((f) => f[f.length - 1] ?? null),
+    refetchInterval: 2000,
+  })
+  return {
+    assets: assets.data,
+    faultWindows: faults.data,
+    frame: frame.data,
+    isLoading: assets.isLoading || frame.isLoading,
+    isError: assets.isError || frame.isError,
+  }
+}

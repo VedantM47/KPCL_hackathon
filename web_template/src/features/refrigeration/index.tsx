@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import { usePlant } from '@/context/plant-context'
 import { useAssetSeries, useKpis } from '@/hooks/use-kpcl'
 import { fmtCop, fmtRupees, fmtTemp } from '@/lib/format'
+import { explainCondenserApproach, explainCop, explainKwPerTr } from '@/lib/chart-explanations'
+import { ChartExplainer } from '@/components/kpcl/chart-explainer'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -86,15 +88,17 @@ export function Refrigeration() {
             </CardHeader>
             <CardContent>
               {isLoading || !stats ? <Skeleton className='h-24 w-full' /> : (
-                <BenchmarkGauge
-                  label='kW per TR'
-                  unit='kW/TR'
-                  value={stats.avgKwPerTr}
-                  min={0.7}
-                  max={1.3}
-                  goodMax={0.88}
-                  warnMax={1.05}
-                />
+                <ChartExplainer explain={() => explainKwPerTr(stats.avgKwPerTr, 0.88, 1.05)}>
+                  <BenchmarkGauge
+                    label='kW per TR'
+                    unit='kW/TR'
+                    value={stats.avgKwPerTr}
+                    min={0.7}
+                    max={1.3}
+                    goodMax={0.88}
+                    warnMax={1.05}
+                  />
+                </ChartExplainer>
               )}
               <p className='mt-6 text-[11px] text-muted-foreground'>
                 Benchmark band is an assumed typical-screw-chiller rule of thumb (0.85 kW/TR base in config.yaml),
@@ -110,6 +114,7 @@ export function Refrigeration() {
             <CardContent>
               {isLoading ? <Skeleton className='h-40 w-full' /> : (
                 <TrendChart
+                  explain={() => explainCondenserApproach(series as never[])}
                   data={series as never[]}
                   xKey='ts'
                   yUnit='°C'
@@ -129,6 +134,7 @@ export function Refrigeration() {
           <CardContent>
             {isLoading ? <Skeleton className='h-40 w-full' /> : (
               <TrendChart
+                explain={() => explainCop(series as never[], 'COP')}
                 data={series as never[]}
                 xKey='ts'
                 height={160}
@@ -173,6 +179,7 @@ export function Refrigeration() {
         <CardContent>
           {isLoading ? <Skeleton className='h-48 w-full' /> : (
             <TrendChart
+              explain={() => explainCop(series as never[], 'thermal_cop')}
               data={series as never[]}
               xKey='ts'
               series={[{ key: 'thermal_cop', label: 'Thermal COP', color: 'brand' }]}

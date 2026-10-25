@@ -5,12 +5,14 @@ import { usePlant } from '@/context/plant-context'
 import { useFaultWindows, useLiveStream } from '@/hooks/use-kpcl'
 import { fmtBar, fmtDateTime, fmtKw, fmtPct, fmtRupees, fmtTemp, fmtTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { explainLiveDemand, explainLivePowerSpark } from '@/lib/chart-explanations'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { KpiCard } from '@/components/kpcl/kpi-card'
 import { PageShell } from '@/components/kpcl/page-header'
+import { FacilityView3D } from '@/components/kpcl/facility/facility-view-3d'
 import { PeakPlanCard } from '@/components/kpcl/peak-plan-card'
 import { SeverityBadge } from '@/components/kpcl/severity-badge'
 import { TrendChart } from '@/components/kpcl/trend-chart'
@@ -99,6 +101,7 @@ export function LiveMonitor() {
           value={fmtKw(latest?.plant.kW)}
           sub={latest ? `${latest.plant.kVA?.toFixed(0)} kVA · pf ${latest.plant.pf?.toFixed(2)}` : undefined}
           trend={frames.slice(-48).map((f) => f.plant.kW ?? 0)}
+          explain={() => explainLivePowerSpark(frames.slice(-48).map((f) => f.plant.kW ?? 0))}
           icon={<Zap className='size-4' />}
         />
         <KpiCard
@@ -133,6 +136,7 @@ export function LiveMonitor() {
           </CardHeader>
           <CardContent>
             <TrendChart
+              explain={() => explainLiveDemand(chartData as never[], info?.name ?? 'the plant')}
               data={chartData}
               xKey='ts'
               variant='line'
@@ -175,26 +179,29 @@ export function LiveMonitor() {
         <PeakPlanCard date={latest?.ts.slice(0, 10)} title="Today's peak-shaving schedule" />
       </div>
 
-      <Card className='mt-4'>
-        <CardHeader className='pb-2'>
-          <CardTitle className='text-sm font-medium'>Assets</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className='grid gap-2 sm:grid-cols-2 lg:grid-cols-5'>
-            {latest?.assets.map((a) => (
-              <div key={a.asset_id} className='rounded-md border px-3 py-2'>
-                <p className='truncate font-mono text-[11px]'>{a.asset_id}</p>
-                <p className='mt-0.5 font-mono text-base font-semibold tabular-nums'>{fmtKw(a.kW)}</p>
-                {a.state && (
-                  <span className={cn('rounded px-1.5 py-0.5 text-[10px] capitalize', STATE_STYLE[a.state] ?? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400')}>
-                    {a.state}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      <div className='mt-4 grid gap-3 lg:grid-cols-5'>
+        <Card className='lg:col-span-3'>
+          <CardHeader className='pb-2'>
+            <CardTitle className='text-sm font-medium'>Assets</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className='grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
+              {latest?.assets.map((a) => (
+                <div key={a.asset_id} className='rounded-md border px-3 py-2'>
+                  <p className='truncate font-mono text-[11px]'>{a.asset_id}</p>
+                  <p className='mt-0.5 font-mono text-base font-semibold tabular-nums'>{fmtKw(a.kW)}</p>
+                  {a.state && (
+                    <span className={cn('rounded px-1.5 py-0.5 text-[10px] capitalize', STATE_STYLE[a.state] ?? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400')}>
+                      {a.state}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        <FacilityView3D className='lg:col-span-2' />
+      </div>
 
       <p className='text-muted-foreground mt-4 text-[11px]'>
         {latest?.data_label ?? 'simulated live replay'} — the server replays the pre-generated year at accelerated speed

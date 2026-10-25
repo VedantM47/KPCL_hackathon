@@ -3,6 +3,7 @@ import { Droplets, Gauge, Leaf, Wallet } from 'lucide-react'
 import { usePlant } from '@/context/plant-context'
 import { useLeaksDaily, useLossesSummary } from '@/hooks/use-kpcl'
 import { fmtRupees, fmtShortDate, fmtTco2 } from '@/lib/format'
+import { explainLeakCost } from '@/lib/chart-explanations'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { KpiCard } from '@/components/kpcl/kpi-card'
@@ -71,6 +72,7 @@ export function LossTracker() {
             <Skeleton className='h-52 w-full' />
           ) : (
             <TrendChart
+              explain={() => explainLeakCost(chartData as never[], ['CMP-CENT-01', 'CMP-REC-01', 'CMP-SCR-01'])}
               data={chartData}
               xKey='date'
               xTickFormatter={fmtShortDate}

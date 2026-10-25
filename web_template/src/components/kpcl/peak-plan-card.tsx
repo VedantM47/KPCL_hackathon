@@ -3,6 +3,7 @@ import { ArrowRight, CalendarClock, Power } from 'lucide-react'
 import { usePeakDays, usePeakPlan } from '@/hooks/use-kpcl'
 import { fmtRupees } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { explainPeakPlan } from '@/lib/chart-explanations'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -62,6 +63,7 @@ export function PeakPlanCard({ date: fixedDate, title = 'Peak-shaving schedule' 
           <div className='grid gap-4 lg:grid-cols-5'>
             <div className='lg:col-span-3'>
               <TrendChart
+                explain={() => explainPeakPlan(plan)}
                 data={chartData}
                 xKey='time'
                 variant='line'

@@ -1,5 +1,7 @@
 import { useMemo } from 'react'
 import { cn } from '@/lib/utils'
+import { explainFaultTimeline } from '@/lib/chart-explanations'
+import { ChartExplainer } from '@/components/kpcl/chart-explainer'
 
 const SEVERITY_CLASS: Record<number, string> = {
   0: 'bg-muted/40',
@@ -42,33 +44,35 @@ export function FaultTimeline({ daily, assetIds, startDate, endDate }: FaultTime
   }, [daily])
 
   return (
-    <div className='overflow-x-auto'>
-      <div className='min-w-[720px]'>
-        {assetIds.map((assetId) => (
-          <div key={assetId} className='flex items-center gap-2 py-[2px]'>
-            <span className='w-32 shrink-0 truncate text-right text-[11px] text-muted-foreground'>{assetId}</span>
-            <div className='flex grow gap-[1px]'>
-              {days.map((day) => {
-                const rank = rankByAssetDay.get(`${assetId}|${day}`) ?? 0
-                return (
-                  <div
-                    key={day}
-                    title={`${assetId} — ${day}${rank ? ` — flagged (${SEVERITY_LABEL[rank]})` : ''}`}
-                    className={cn('h-3 flex-1 rounded-[1px]', SEVERITY_CLASS[rank])}
-                  />
-                )
-              })}
+    <ChartExplainer explain={() => explainFaultTimeline(daily, assetIds)}>
+      <div className='overflow-x-auto'>
+        <div className='min-w-[720px]'>
+          {assetIds.map((assetId) => (
+            <div key={assetId} className='flex items-center gap-2 py-[2px]'>
+              <span className='w-32 shrink-0 truncate text-right text-[11px] text-muted-foreground'>{assetId}</span>
+              <div className='flex grow gap-[1px]'>
+                {days.map((day) => {
+                  const rank = rankByAssetDay.get(`${assetId}|${day}`) ?? 0
+                  return (
+                    <div
+                      key={day}
+                      title={`${assetId} — ${day}${rank ? ` — flagged (${SEVERITY_LABEL[rank]})` : ''}`}
+                      className={cn('h-3 flex-1 rounded-[1px]', SEVERITY_CLASS[rank])}
+                    />
+                  )
+                })}
+              </div>
             </div>
-          </div>
-        ))}
-        <div className='mt-2 flex items-center gap-3 pl-[136px] text-[10px] text-muted-foreground'>
-          {SEVERITY_LABEL.map((label, rank) => (
-            <span key={label} className='flex items-center gap-1'>
-              <span className={cn('h-2.5 w-2.5 rounded-[1px]', SEVERITY_CLASS[rank])} /> {label}
-            </span>
           ))}
+          <div className='mt-2 flex items-center gap-3 pl-[136px] text-[10px] text-muted-foreground'>
+            {SEVERITY_LABEL.map((label, rank) => (
+              <span key={label} className='flex items-center gap-1'>
+                <span className={cn('h-2.5 w-2.5 rounded-[1px]', SEVERITY_CLASS[rank])} /> {label}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
-    </div>
+    </ChartExplainer>
   )
 }

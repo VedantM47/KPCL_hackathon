@@ -17,6 +17,8 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ChartExplainer } from '@/components/kpcl/chart-explainer'
+import { explainForecast } from '@/lib/chart-explanations'
 
 // Day-ahead forecast for the replay's "tomorrow": P10-P90 band, central forecast, what was metered,
 // and (in kVA) the contract line, plus the day's peak and breach-risk forecast. Same chart idiom as
@@ -98,75 +100,77 @@ export function ForecastCard({ forecast, className }: { forecast?: ForecastRespo
               </div>
             ) : null}
 
-            <ResponsiveContainer width='100%' height={210}>
-              <ComposedChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray='3 3' stroke='var(--border)' vertical={false} />
-                <XAxis
-                  dataKey='ts'
-                  tickFormatter={fmtTime}
-                  tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-                  tickLine={false}
-                  axisLine={{ stroke: 'var(--border)' }}
-                  minTickGap={24}
-                />
-                <YAxis
-                  tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-                  tickLine={false}
-                  axisLine={false}
-                  width={68}
-                  unit={` ${unit}`}
-                  domain={[0, 'auto']}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'var(--popover)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 6,
-                    fontSize: 12,
-                  }}
-                  labelStyle={{ color: 'var(--muted-foreground)', marginBottom: 2 }}
-                  labelFormatter={(v) => fmtTime(String(v))}
-                  formatter={(value, name) => {
-                    if (Array.isArray(value)) return [`${Number(value[0]).toFixed(0)}–${Number(value[1]).toFixed(0)}`, String(name)]
-                    return [typeof value === 'number' ? value.toFixed(1) : '—', String(name)]
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: 11 }} iconSize={10} />
-                <Area
-                  dataKey='band'
-                  name='80% range'
-                  stroke='none'
-                  fill='var(--chart-1)'
-                  fillOpacity={0.15}
-                  isAnimationActive={false}
-                />
-                <Line
-                  dataKey='forecast'
-                  name='Forecast'
-                  stroke='var(--chart-1)'
-                  strokeWidth={1.75}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-                <Line
-                  dataKey='actual'
-                  name='Metered'
-                  stroke='var(--chart-2)'
-                  strokeWidth={1.25}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-                {unit === 'kVA' && contract != null && (
-                  <ReferenceLine
-                    y={contract}
-                    ifOverflow='extendDomain'
-                    stroke='var(--chart-4)'
-                    strokeDasharray='4 3'
-                    label={{ value: `contract ${contract.toFixed(0)}`, fontSize: 10, fill: 'var(--chart-4)', position: 'insideTopRight' }}
+            <ChartExplainer explain={() => explainForecast(forecast, unit)}>
+              <ResponsiveContainer width='100%' height={210}>
+                <ComposedChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray='3 3' stroke='var(--border)' vertical={false} />
+                  <XAxis
+                    dataKey='ts'
+                    tickFormatter={fmtTime}
+                    tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                    tickLine={false}
+                    axisLine={{ stroke: 'var(--border)' }}
+                    minTickGap={24}
                   />
-                )}
-              </ComposedChart>
-            </ResponsiveContainer>
+                  <YAxis
+                    tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={68}
+                    unit={` ${unit}`}
+                    domain={[0, 'auto']}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'var(--popover)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      fontSize: 12,
+                    }}
+                    labelStyle={{ color: 'var(--muted-foreground)', marginBottom: 2 }}
+                    labelFormatter={(v) => fmtTime(String(v))}
+                    formatter={(value, name) => {
+                      if (Array.isArray(value)) return [`${Number(value[0]).toFixed(0)}–${Number(value[1]).toFixed(0)}`, String(name)]
+                      return [typeof value === 'number' ? value.toFixed(1) : '—', String(name)]
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} iconSize={10} />
+                  <Area
+                    dataKey='band'
+                    name='80% range'
+                    stroke='none'
+                    fill='var(--chart-1)'
+                    fillOpacity={0.15}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    dataKey='forecast'
+                    name='Forecast'
+                    stroke='var(--chart-1)'
+                    strokeWidth={1.75}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    dataKey='actual'
+                    name='Metered'
+                    stroke='var(--chart-2)'
+                    strokeWidth={1.25}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                  {unit === 'kVA' && contract != null && (
+                    <ReferenceLine
+                      y={contract}
+                      ifOverflow='extendDomain'
+                      stroke='var(--chart-4)'
+                      strokeDasharray='4 3'
+                      label={{ value: `contract ${contract.toFixed(0)}`, fontSize: 10, fill: 'var(--chart-4)', position: 'insideTopRight' }}
+                    />
+                  )}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </ChartExplainer>
 
             {ev && (
               <p className='text-muted-foreground mt-1 text-[11px] leading-relaxed'>
